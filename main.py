@@ -13,6 +13,7 @@ from models import *  # Import all models to ensure they're registered
 # Import routes
 from routes.groups import router as groups_router
 from routes.contributions import router as contributions_router
+from routes.auth import router as auth_router
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -90,6 +91,7 @@ async def root():
 # Register routers
 app.include_router(groups_router, prefix="/api/v1")
 app.include_router(contributions_router, prefix="/api/v1")
+app.include_router(auth_router, prefix="/api/v1")
 
 # Additional routes for other tables can be added here
 # app.include_router(profiles_router, prefix="/api/v1")
