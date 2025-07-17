@@ -9,6 +9,16 @@ import uuid
 Base = declarative_base()
 
 # Enums
+
+class PunishmentAction(enum.Enum):
+    BAN = "ban"
+    FINE = "fine"
+    WARNING = "warning"
+
+class PunishmentReason(enum.Enum):
+    LATE_PAYMENT = "late_payment"
+    MISSED_PAYMENT = "missed_payment"
+    RULE_VIOLATION = "rule_violation"
 class ContributionStatus(enum.Enum):
     pending = "pending"
     completed = "completed"
@@ -78,8 +88,11 @@ class Group(Base):
     created_by = Column(UUID(as_uuid=True), ForeignKey("profiles.user_id"), nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    approval_required = Column(Boolean, default=False)
+    emergency_withdraw_allowed = Column(Boolean, default=False)
     
     # Relationships
+    member_punishments = relationship("MemberPunishment", back_populates="group", cascade="all, delete-orphan")
     creator = relationship("Profile", back_populates="created_groups")
     members = relationship("GroupMember", back_populates="group")
     admins = relationship("GroupAdmin", back_populates="group")
@@ -100,6 +113,7 @@ class GroupMember(Base):
     group = relationship("Group", back_populates="members")
     user = relationship("Profile", back_populates="group_memberships")
     contributions = relationship("Contribution", back_populates="member")
+    punishments = relationship("MemberPunishment", back_populates="member", cascade="all, delete-orphan")
 
 class GroupAdmin(Base):
     __tablename__ = "group_admins"
@@ -151,3 +165,22 @@ class Notification(Base):
     user = relationship("Profile", back_populates="notifications")
     group = relationship("Group", back_populates="notifications")
     contribution = relationship("Contribution", back_populates="notifications")
+
+class MemberPunishment(Base):
+    __tablename__ = "member_punishments"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    group_id = Column(UUID(as_uuid=True), ForeignKey("groups.id", ondelete="CASCADE"), nullable=False)
+    member_id = Column(UUID(as_uuid=True), ForeignKey("group_members.id", ondelete="CASCADE"), nullable=False)
+    
+    action = Column(Enum(PunishmentAction), nullable=False)
+    reason = Column(Enum(PunishmentReason), nullable=False)
+    
+    description = Column(Text)
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    resolved_at = Column(DateTime, nullable=True)
+
+    # Relationships
+    group = relationship("Group", back_populates="member_punishments")
+    member = relationship("GroupMember", back_populates="punishments")
