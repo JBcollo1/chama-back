@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, Integer, Float, Boolean, DateTime, ForeignKey, Enum, Text
+from sqlalchemy import Column, String, Integer, Float, Boolean, DateTime, ForeignKey, Enum, Text, UniqueConstraint, Index
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship
 from sqlalchemy.dialects.postgresql import UUID
@@ -53,6 +53,26 @@ class AvalancheToken(Base):
     price_change_24h = Column(Float, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=True)
     last_updated = Column(DateTime, nullable=True)
+
+
+class UserOAuthToken(Base):
+    __tablename__ = "user_oauth_tokens"
+    
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("profiles.user_id"), nullable=False)
+    provider = Column(String(50), nullable=False)  # 'google', 'github', etc.
+    access_token = Column(Text, nullable=False)
+    refresh_token = Column(Text, nullable=True)
+    expires_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    # Relationship to Profile
+    profile = relationship("Profile", back_populates="oauth_tokens")
+    __table_args__ = (
+        UniqueConstraint("user_id", "provider", name="uix_user_provider"),
+        Index("ix_user_provider", "user_id", "provider"),
+    )
 
 class Profile(Base):
     __tablename__ = "profiles"

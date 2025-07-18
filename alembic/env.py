@@ -11,10 +11,12 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 # Import Base and models
 from models import Base
 from models import MemberPunishment, Group, Profile, GroupMember, GroupAdmin, Contribution
-from models import Notification, PunishmentAction, PunishmentReason, ContributionStatus, GroupStatus, MemberStatus, NotificationType
+from models import Notification, PunishmentAction, PunishmentReason, ContributionStatus, GroupStatus, MemberStatus, NotificationType, UserOAuthToken
 
 from database import DATABASE_URL
 
+import os
+print("SQLALCHEMY_DATABASE_URL =", os.getenv("DATABASE_URL"))
 
 
 # Alembic Config

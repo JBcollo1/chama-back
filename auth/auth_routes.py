@@ -26,7 +26,7 @@ class UserLogin(BaseModel):
     email: EmailStr
     password: str
 
-class AuthResponse(BaseModel):
+class AuthResponseWithProvider(BaseModel):
     user_id: str
     email: str
     display_name: Optional[str] = None
@@ -34,6 +34,9 @@ class AuthResponse(BaseModel):
     refresh_token: str
     token_type: str = "bearer"
     expires_in: int
+    provider: Optional[str] = None
+    provider_access_token: Optional[str] = None
+    provider_refresh_token: Optional[str] = None
 
 class TokenRefresh(BaseModel):
     refresh_token: str
@@ -64,9 +67,9 @@ class AuthRoutes:
     def _register_routes(self):
         """Register all authentication-related routes"""
         # Regular auth routes
-        self.router.add_api_route("/register", self.register, methods=["POST"], response_model=AuthResponse)
-        self.router.add_api_route("/login", self.login, methods=["POST"], response_model=AuthResponse)
-        self.router.add_api_route("/refresh", self.refresh_token, methods=["POST"], response_model=AuthResponse)
+        self.router.add_api_route("/register", self.register, methods=["POST"], response_model=AuthResponseWithProvider)
+        self.router.add_api_route("/login", self.login, methods=["POST"], response_model=AuthResponseWithProvider)
+        self.router.add_api_route("/refresh", self.refresh_token, methods=["POST"], response_model=AuthResponseWithProvider)
         self.router.add_api_route("/logout", self.logout, methods=["POST"], response_model=LogoutResponse)
         self.router.add_api_route("/me", self.get_current_user_profile, methods=["GET"], response_model=UserProfile)
         self.router.add_api_route("/verify-token", self.verify_token_endpoint, methods=["POST"])
@@ -75,8 +78,11 @@ class AuthRoutes:
         self.router.add_api_route("/oauth/google", self.google_oauth_url, methods=["GET"], response_model=OAuthUrlResponse)
         self.router.add_api_route("/oauth/github", self.github_oauth_url, methods=["GET"], response_model=OAuthUrlResponse)
         self.router.add_api_route("/oauth/callback", self.oauth_callback, methods=["GET"])
+        
+        # Add route for getting provider tokens
+        self.router.add_api_route("/provider-tokens/{provider}", self.get_provider_token, methods=["GET"])
     
-    def _create_auth_response(self, user_data: Dict[str, Any], response: Response) -> AuthResponse:
+    def _create_auth_response(self, user_data: Dict[str, Any], response: Response) -> AuthResponseWithProvider:
         """Helper method to create auth response with tokens"""
         user_id = user_data["user_id"]
         email = user_data["email"]
@@ -94,7 +100,7 @@ class AuthRoutes:
         # Set HTTP-only cookies
         self.auth_service.set_auth_cookies(response, access_token, refresh_token)
         
-        return AuthResponse(
+        return  AuthResponseWithProvider(
             user_id=user_id,
             email=email,
             display_name=display_name,
@@ -104,7 +110,7 @@ class AuthRoutes:
         )
     
     # Regular auth route handlers
-    def register(self, user_data: UserRegister, response: Response, db: Session = Depends(get_db)) -> AuthResponse:
+    def register(self, user_data: UserRegister, response: Response, db: Session = Depends(get_db)) ->  AuthResponseWithProvider:
         """Register a new user with Supabase Auth and create profile"""
         result = self.auth_service.register_user(
             email=user_data.email,
@@ -116,7 +122,7 @@ class AuthRoutes:
         
         return self._create_auth_response(result, response)
 
-    def login(self, user_data: UserLogin, response: Response, db: Session = Depends(get_db)) -> AuthResponse:
+    def login(self, user_data: UserLogin, response: Response, db: Session = Depends(get_db)) ->  AuthResponseWithProvider:
         """Login user with Supabase Auth"""
         result = self.auth_service.login_user(
             email=user_data.email,
@@ -126,7 +132,7 @@ class AuthRoutes:
         
         return self._create_auth_response(result, response)
 
-    def refresh_token(self, token_data: TokenRefresh, response: Response, db: Session = Depends(get_db)) -> AuthResponse:
+    def refresh_token(self, token_data: TokenRefresh, response: Response, db: Session = Depends(get_db)) ->  AuthResponseWithProvider:
         """Refresh access token using refresh token"""
         result = self.auth_service.refresh_user_token(
             refresh_token=token_data.refresh_token,
@@ -213,7 +219,15 @@ class AuthRoutes:
             # Handle OAuth callback
             result = self.auth_service.handle_oauth_callback(code, db)
             
-            # Create tokens
+            # Store provider tokens in database for future API calls
+            if result.get("provider_access_token"):
+                self.auth_service.store_provider_tokens(
+                    user_id=result["user_id"],
+                    provider_data=result,
+                    db=db
+                )
+            
+            # Create our own application tokens
             access_token = self.auth_service.create_access_token(
                 data={"sub": result["user_id"], "email": result["email"]},
                 expires_delta=timedelta(minutes=15)
@@ -222,12 +236,16 @@ class AuthRoutes:
                 data={"sub": result["user_id"], "email": result["email"]}
             )
             
-            # Set HTTP-only cookies
+            # Set HTTP-only cookies with our tokens
             self.auth_service.set_auth_cookies(response, access_token, refresh_token)
             
-            # Redirect to frontend success page
+            # Redirect to frontend success page with provider info
+            redirect_url = f"{FRONTEND_URL}/login/success"
+            if result.get("provider"):
+                redirect_url += f"?provider={result['provider']}"
+            
             return RedirectResponse(
-                url=f"{FRONTEND_URL}/login/success",
+                url=redirect_url,
                 status_code=status.HTTP_302_FOUND
             )
             
@@ -237,6 +255,32 @@ class AuthRoutes:
                 url=f"{FRONTEND_URL}/login?error=callback_failed",
                 status_code=status.HTTP_302_FOUND
             )
+
+    def get_provider_token(
+        self,
+        provider: str,
+        request: Request,
+        credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
+        db: Session = Depends(get_db)
+    ):
+        """Get stored provider token for API calls"""
+        user_data = self.auth_service.get_current_user(request, credentials, db)
+        user_id = user_data["user_id"]
+        
+        token_data = self.auth_service.get_provider_token(user_id, provider, db)
+        
+        if not token_data:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"No {provider} token found for user"
+            )
+        
+        return {
+            "provider": provider,
+            "access_token": token_data["access_token"],
+            "expires_at": token_data["expires_at"],
+            "is_expired": token_data["is_expired"]
+        }
 
 
 # Create router instance
