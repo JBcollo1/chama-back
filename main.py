@@ -13,7 +13,7 @@ from models import *  # Import all models to ensure they're registered
 # Import routes
 from routes.groups import router as groups_router
 from routes.contributions import router as contributions_router
-from routes.auth import router as auth_router
+from auth.auth_routes import router as auth_router
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
