@@ -5,8 +5,8 @@ from sqlalchemy.dialects.postgresql import UUID
 from datetime import datetime
 import enum
 import uuid
+from database import Base
 
-Base = declarative_base()
 
 # Enums
 

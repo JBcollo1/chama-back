@@ -44,7 +44,7 @@ app = FastAPI(
     version="1.0.0",
     lifespan=lifespan
 )
-
+print(Base.metadata.tables.keys())
 # CORS middleware
 app.add_middleware(
     CORSMiddleware,
