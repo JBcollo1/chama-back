@@ -7,7 +7,7 @@ from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy.orm import Session
 from database import get_db
-from auth_service import auth_service
+from auth.auth_service import auth_service
 
 # Environment variables
 FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3000")
