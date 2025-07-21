@@ -341,7 +341,7 @@ class AuthService:
             response = self.supabase.auth.sign_in_with_oauth({
                 "provider": provider,
                 "options": {
-                    "redirect_to": f"{request.base_url}auth/oauth/callback?provider={provider}"
+                    "redirect_to": f"{request.base_url}api/v1/auth/oauth/callback?provider={provider}"
                 }
             })
             

@@ -243,8 +243,9 @@ class AuthRoutes:
             redirect_url = f"{FRONTEND_URL}/login/success"
             if result.get("provider"):
                 redirect_url += f"?provider={result['provider']}"
-            
+            print(f"OAuth callback working")
             return RedirectResponse(
+              
                 url=redirect_url,
                 status_code=status.HTTP_302_FOUND
             )
