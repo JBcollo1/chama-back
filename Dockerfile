@@ -1,5 +1,9 @@
 
 FROM python:3.11-slim
+ENV LANG C.UTF-8
+ENV LC_ALL C.UTF-8
+RUN pip install psycopg2-binary
+
 
 
 ENV PYTHONDONTWRITEBYTECODE=1
