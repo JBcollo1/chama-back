@@ -20,13 +20,14 @@ engine = create_engine(
     DATABASE_URL,
     echo=True,  # Set to False in production
     pool_pre_ping=True,
+     connect_args={"options": "-c client_encoding=utf8"},
     pool_recycle=300,
     pool_size=10,
-    max_overflow=20,
-    connect_args={"client_encoding": "utf8"} 
+    max_overflow=20
+  
 
 )
-
+print("DATABASE_URL =", repr(DATABASE_URL))
 # Create SessionLocal class
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
