@@ -2,6 +2,7 @@ from pydantic import BaseModel, Field, ConfigDict
 from typing import Optional, List
 from datetime import datetime
 from uuid import UUID
+from decimal import Decimal
 from models import ContributionStatus, GroupStatus, MemberStatus, NotificationType
 
 # Base schemas
@@ -39,8 +40,15 @@ class GroupBase(BaseSchema):
     end_date: Optional[datetime] = None
 
 class GroupCreate(GroupBase):
+    name: str = Field(..., min_length=1, max_length=255)
+    description: Optional[str] = None
+    contribution_amount: Decimal = Field(..., gt=0)
+    max_members: int = Field(..., ge=3, le=100)
+    start_date: Optional[datetime] = None
+    end_date: Optional[datetime] = None
+    contribution_frequency: Optional[str] = "weekly"
+    approval_required: Optional[bool] = True
     created_by: UUID
-
 class GroupUpdate(BaseSchema):
     name: Optional[str] = None
     description: Optional[str] = None
@@ -51,13 +59,34 @@ class GroupUpdate(BaseSchema):
     end_date: Optional[datetime] = None
     status: Optional[GroupStatus] = None
 
+class BlockchainInfo(BaseModel):
+    contract_address: Optional[str] = None
+    tx_hash: Optional[str] = None
+    block_number: Optional[int] = None
+    gas_used: Optional[int] = None
+    verified: Optional[bool] = None
+
 class GroupResponse(GroupBase):
     id: UUID
-    status: GroupStatus
+    name: str
+    description: Optional[str] = None
+    contribution_amount: Decimal
+    max_members: int
+    member_count: Optional[int] = 0
+    start_date: Optional[datetime] = None
+    end_date: Optional[datetime] = None
+    contribution_frequency: Optional[str] = None
+    status: str
     created_by: UUID
     created_at: datetime
     updated_at: datetime
-    member_count: Optional[int] = None
+    
+    # Blockchain fields
+    contract_address: Optional[str] = None
+    creation_tx_hash: Optional[str] = None
+    creation_block_number: Optional[int] = None
+    blockchain_verified: Optional[bool] = None
+    blockchain_info: Optional[BlockchainInfo] = None
 
 class GroupWithDetails(GroupResponse):
     members: List['GroupMemberResponse'] = []
@@ -164,5 +193,15 @@ class AvalancheTokenResponse(AvalancheTokenBase):
     created_at: Optional[datetime] = None
     last_updated: Optional[datetime] = None
 
+    
+class WalletConnect(BaseModel):
+    wallet_address: str = Field(..., regex="^0x[a-fA-F0-9]{40}$")
+    wallet_provider: Optional[str] = None
+
+
+class BlockchainSyncResponse(BaseModel):
+    total_blockchain_groups: int
+    synced_count: int
+    errors: List[str] = []
 # Update forward references
 GroupWithDetails.model_rebuild()
