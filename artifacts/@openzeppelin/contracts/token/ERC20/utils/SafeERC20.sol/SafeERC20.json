@@ -1,0 +1,43 @@
+{
+  "_format": "hh-sol-artifact-1",
+  "contractName": "SafeERC20",
+  "sourceName": "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol",
+  "abi": [
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "spender",
+          "type": "address"
+        },
+        {
+          "internalType": "uint256",
+          "name": "currentAllowance",
+          "type": "uint256"
+        },
+        {
+          "internalType": "uint256",
+          "name": "requestedDecrease",
+          "type": "uint256"
+        }
+      ],
+      "name": "SafeERC20FailedDecreaseAllowance",
+      "type": "error"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "token",
+          "type": "address"
+        }
+      ],
+      "name": "SafeERC20FailedOperation",
+      "type": "error"
+    }
+  ],
+  "bytecode": "0x60808060405234601757603a9081601d823930815050f35b600080fdfe600080fdfea26469706673582212202a38e2ba0e96d24fc9346d91fe6e3d5b705f0fe8568de88adb2c4ecd037057e164736f6c634300081c0033",
+  "deployedBytecode": "0x600080fdfea26469706673582212202a38e2ba0e96d24fc9346d91fe6e3d5b705f0fe8568de88adb2c4ecd037057e164736f6c634300081c0033",
+  "linkReferences": {},
+  "deployedLinkReferences": {}
+}
