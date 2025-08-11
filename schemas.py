@@ -195,7 +195,7 @@ class AvalancheTokenResponse(AvalancheTokenBase):
 
     
 class WalletConnect(BaseModel):
-    wallet_address: str = Field(..., regex="^0x[a-fA-F0-9]{40}$")
+    wallet_address: str = Field(..., pattern="^0x[a-fA-F0-9]{40}$")
     wallet_provider: Optional[str] = None
 
 

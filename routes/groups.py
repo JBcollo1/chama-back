@@ -129,8 +129,8 @@ class GroupRoutes:
         limit: int = Query(100, ge=1, le=100),
         status: Optional[GroupStatus] = None,
         search: Optional[str] = None,
-        sort_by: str = Query("created_at", regex="^(created_at|name|start_date|contribution_amount)$"),
-        sort_order: str = Query("desc", regex="^(asc|desc)$"),
+        sort_by: str = Query("created_at", pattern="^(created_at|name|start_date|contribution_amount)$"),
+        sort_order: str = Query("desc", pattern="^(asc|desc)$"),
         include_blockchain: bool = Query(False, description="Include blockchain verification")
     ) -> List[GroupResponse]:
         """Get all groups with filtering, pagination, and optional blockchain verification"""

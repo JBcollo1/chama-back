@@ -65,8 +65,8 @@ class ContributionRoutes:
         member_id: Optional[UUID] = None,
         due_date_from: Optional[datetime] = None,
         due_date_to: Optional[datetime] = None,
-        sort_by: str = Query("due_date", regex="^(due_date|amount|created_at|status)$"),
-        sort_order: str = Query("asc", regex="^(asc|desc)$")
+        sort_by: str = Query("due_date", pattern="^(due_date|amount|created_at|status)$"),
+        sort_order: str = Query("asc", pattern="^(asc|desc)$")
     ) -> List[ContributionResponse]:
         """Get all contributions with filtering and pagination"""
         query = db.query(Contribution)
@@ -165,8 +165,8 @@ class ContributionRoutes:
         skip: int = Query(0, ge=0),
         limit: int = Query(100, ge=1, le=100),
         status: Optional[ContributionStatus] = None,
-        sort_by: str = Query("due_date", regex="^(due_date|amount|created_at)$"),
-        sort_order: str = Query("asc", regex="^(asc|desc)$")
+        sort_by: str = Query("due_date", pattern="^(due_date|amount|created_at)$"),
+        sort_order: str = Query("asc", pattern="^(asc|desc)$")
     ) -> List[ContributionResponse]:
         """Get all contributions for a specific group"""
         query = db.query(Contribution).filter(Contribution.group_id == group_id)
