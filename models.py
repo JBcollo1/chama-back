@@ -92,6 +92,7 @@ class Profile(Base):
     group_memberships = relationship("GroupMember", back_populates="user")
     admin_roles = relationship("GroupAdmin", back_populates="user")
     notifications = relationship("Notification", back_populates="user")
+    oauth_tokens = relationship("UserOAuthToken", back_populates="profile")
 
 class Group(Base):
     __tablename__ = "groups"
