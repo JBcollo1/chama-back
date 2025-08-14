@@ -48,7 +48,11 @@ print(Base.metadata.tables.keys())
 # CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Configure appropriately for production
+    allow_origins=[
+    "http://localhost:8080",  
+    "https://chamaweb3.netlify.app/"  
+],
+
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
