@@ -34,13 +34,6 @@ class AuthService:
         self.supabase_admin = supabase_admin
         self.pwd_context = pwd_context
     
-    # Password utilities
-    def verify_password(self, plain_password: str, hashed_password: str) -> bool:
-        return self.pwd_context.verify(plain_password, hashed_password)
-
-    def get_password_hash(self, password: str) -> str:
-        return self.pwd_context.hash(password)
-    
     # Token utilities
     def create_access_token(self, data: Dict[str, Any], expires_delta: Optional[timedelta] = None) -> str:
         to_encode = data.copy()
@@ -49,14 +42,25 @@ class AuthService:
         else:
             expire = datetime.utcnow() + timedelta(minutes=15)
         
-        to_encode.update({"exp": expire})
+        to_encode.update({
+            "exp": expire,
+            "iat": datetime.utcnow(),
+            "type": "access"
+        })
         encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm="HS256")
         return encoded_jwt
 
     def create_refresh_token(self, data: Dict[str, Any]) -> str:
         to_encode = data.copy()
         expire = datetime.utcnow() + timedelta(days=30)
-        to_encode.update({"exp": expire, "type": "refresh"})
+        jti = str(uuid.uuid4())  # Unique token ID for database storage
+        
+        to_encode.update({
+            "exp": expire,
+            "iat": datetime.utcnow(),
+            "type": "refresh",
+            "jti": jti
+        })
         encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm="HS256")
         return encoded_jwt
 
@@ -70,6 +74,101 @@ class AuthService:
                 detail="Invalid token",
                 headers={"WWW-Authenticate": "Bearer"},
             )
+    
+    def validate_supabase_token(self, supabase_token: str) -> Dict[str, Any]:
+        """Validate Supabase token and extract user info - only used during login/signup"""
+        try:
+            # Get user info from Supabase using the token
+            user_response = self.supabase.auth.get_user(supabase_token)
+            
+            if not user_response.user:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Invalid Supabase token"
+                )
+            
+            return {
+                "user_id": user_response.user.id,
+                "email": user_response.user.email,
+                "user_metadata": user_response.user.user_metadata or {}
+            }
+            
+        except Exception as e:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail=f"Token validation failed: {str(e)}"
+            )
+    
+    def store_refresh_token(self, user_id: str, refresh_token: str, db: Session):
+        """Store refresh token in database"""
+        from models import RefreshToken
+        
+        # Decode token to get JTI and expiration
+        payload = self.verify_token(refresh_token)
+        jti = payload.get("jti")
+        expires_at = datetime.fromtimestamp(payload.get("exp"))
+        
+        # Revoke existing tokens for this user
+        db.query(RefreshToken).filter(
+            RefreshToken.user_id == uuid.UUID(user_id),
+            RefreshToken.is_revoked == False
+        ).update({"is_revoked": True})
+        
+        # Store new refresh token
+        token_record = RefreshToken(
+            jti=jti,
+            user_id=uuid.UUID(user_id),
+            token_hash=self.pwd_context.hash(refresh_token),  # Store hashed token
+            expires_at=expires_at,
+            created_at=datetime.utcnow(),
+            is_revoked=False
+        )
+        
+        db.add(token_record)
+        db.commit()
+    
+    def validate_refresh_token(self, refresh_token: str, db: Session) -> bool:
+        """Validate refresh token against database"""
+        from models import RefreshToken
+        
+        try:
+            payload = self.verify_token(refresh_token)
+            jti = payload.get("jti")
+            
+            if not jti:
+                return False
+            
+            # Find token in database
+            token_record = db.query(RefreshToken).filter(
+                RefreshToken.jti == jti,
+                RefreshToken.is_revoked == False,
+                RefreshToken.expires_at > datetime.utcnow()
+            ).first()
+            
+            if not token_record:
+                return False
+            
+            # Verify token hash
+            return self.pwd_context.verify(refresh_token, token_record.token_hash)
+            
+        except Exception:
+            return False
+    
+    def revoke_refresh_token(self, refresh_token: str, db: Session):
+        """Revoke a refresh token"""
+        from models import RefreshToken
+        
+        try:
+            payload = self.verify_token(refresh_token)
+            jti = payload.get("jti")
+            
+            if jti:
+                db.query(RefreshToken).filter(
+                    RefreshToken.jti == jti
+                ).update({"is_revoked": True})
+                db.commit()
+        except Exception:
+            pass  # Token might be invalid, that's ok for logout
     
     # Cookie utilities
     def set_auth_cookies(self, response: Response, access_token: str, refresh_token: str):
@@ -114,35 +213,30 @@ class AuthService:
     
     # User profile utilities
     def create_or_update_profile(self, user_data: Dict[str, Any], db: Session) -> Any:
-        """Create or update user profile from OAuth data"""
+        """Create or update user profile"""
         from models import Profile
         
-        user_id = uuid.UUID(user_data["id"])
+        user_id = uuid.UUID(user_data["user_id"])
+        user_metadata = user_data.get("user_metadata", {})
         
         # Check if profile exists
         profile = db.query(Profile).filter(Profile.user_id == user_id).first()
         
         if profile:
             # Update existing profile
-            if user_data.get("user_metadata", {}).get("full_name"):
-                profile.display_name = user_data["user_metadata"]["full_name"]
-            elif user_data.get("user_metadata", {}).get("name"):
-                profile.display_name = user_data["user_metadata"]["name"]
-            
-            if user_data.get("phone"):
-                profile.phone_number = user_data["phone"]
+            if user_metadata.get("full_name"):
+                profile.display_name = user_metadata["full_name"]
+            elif user_metadata.get("name"):
+                profile.display_name = user_metadata["name"]
+            profile.updated_at = datetime.utcnow()
         else:
             # Create new profile
-            display_name = None
-            if user_data.get("user_metadata", {}).get("full_name"):
-                display_name = user_data["user_metadata"]["full_name"]
-            elif user_data.get("user_metadata", {}).get("name"):
-                display_name = user_data["user_metadata"]["name"]
+            display_name = user_metadata.get("full_name") or user_metadata.get("name")
             
             profile = Profile(
                 user_id=user_id,
                 display_name=display_name,
-                phone_number=user_data.get("phone")
+                phone_number=None  # OAuth doesn't typically provide phone
             )
             db.add(profile)
         
@@ -210,7 +304,7 @@ class AuthService:
                 "password": password,
             })
             
-            if auth_response.user is None:
+            if auth_response.user is None or auth_response.session is None:
                 raise HTTPException(
                     status_code=status.HTTP_401_UNAUTHORIZED,
                     detail="Invalid email or password"
@@ -237,16 +331,16 @@ class AuthService:
             )
 
     def refresh_user_token(self, refresh_token: str, db: Session) -> Dict[str, Any]:
-        """Refresh access token using refresh token"""
+        """Refresh access token using refresh token stored in database"""
+        # Validate refresh token against database
+        if not self.validate_refresh_token(refresh_token, db):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid or expired refresh token"
+            )
+        
         try:
             payload = self.verify_token(refresh_token)
-            
-            if payload.get("type") != "refresh":
-                raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="Invalid refresh token"
-                )
-            
             user_id = payload.get("sub")
             email = payload.get("email")
             
@@ -255,6 +349,12 @@ class AuthService:
             profile = db.query(Profile).filter(
                 Profile.user_id == uuid.UUID(user_id)
             ).first()
+            
+            if not profile:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="User profile not found"
+                )
             
             return {
                 "user_id": user_id,
@@ -274,23 +374,22 @@ class AuthService:
         credentials: Optional[HTTPAuthorizationCredentials] = None,
         db: Session = None
     ) -> Dict[str, Any]:
-        """Get current authenticated user"""
+        """Get current authenticated user using our own JWT tokens"""
         
-        # Try to get token from cookie first, then header
-        token = None
-        if not credentials:
-            token = request.cookies.get("access_token")
-        else:
-            token = credentials.credentials
+        # Get token from cookie or header
+        token = self.get_token_from_cookie_or_header(request, credentials)
         
-        if not token:
+        # Verify our own JWT token
+        payload = self.verify_token(token)
+        
+        # Ensure it's an access token
+        if payload.get("type") != "access":
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="No token provided",
+                detail="Invalid token type",
                 headers={"WWW-Authenticate": "Bearer"},
             )
         
-        payload = self.verify_token(token)
         user_id = payload.get("sub")
         
         if user_id is None:
@@ -364,7 +463,7 @@ class AuthService:
                 "auth_code": code
             })
             
-            if not auth_response.user:
+            if not auth_response.user or not auth_response.session:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail="OAuth authentication failed"
@@ -374,13 +473,30 @@ class AuthService:
             user_id = user.id
             email = user.email
             
-            # Create or update profile
-            profile = self.create_or_update_profile(user.model_dump(), db)
+            # Create or update profile with OAuth data
+            user_data = {
+                "user_id": user_id,
+                "email": email,
+                "user_metadata": user.user_metadata or {}
+            }
+            
+            profile = self.create_or_update_profile(user_data, db)
+            
+            # Store OAuth tokens if available
+            provider_data = None
+            if auth_response.session.provider_token:
+                provider_data = {
+                    "provider": auth_response.session.provider or "unknown",
+                    "access_token": auth_response.session.provider_token,
+                    "refresh_token": auth_response.session.provider_refresh_token,
+                }
+                self.store_oauth_tokens(user_id, provider_data, db)
             
             return {
                 "user_id": user_id,
                 "email": email,
-                "profile": profile
+                "profile": profile,
+                "oauth_data": provider_data
             }
             
         except Exception as e:
@@ -388,6 +504,122 @@ class AuthService:
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"OAuth callback failed: {str(e)}"
             )
+
+    # Account management operations (still use Supabase)
+    def reset_password(self, email: str):
+        """Send password reset email via Supabase"""
+        try:
+            response = self.supabase.auth.reset_password_email(email, {
+                "redirect_to": f"{FRONTEND_URL}/reset-password"
+            })
+            return {"message": "Password reset email sent"}
+        except Exception as e:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed to send reset email: {str(e)}"
+            )
+    
+    def update_password(self, supabase_token: str, new_password: str):
+        """Update password via Supabase"""
+        try:
+            # Validate the reset token with Supabase
+            user_data = self.validate_supabase_token(supabase_token)
+            
+            # Update password
+            response = self.supabase.auth.update_user({
+                "password": new_password
+            })
+            
+            return {"message": "Password updated successfully"}
+        except Exception as e:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed to update password: {str(e)}"
+            )
+    
+    def verify_email(self, supabase_token: str):
+        """Verify email via Supabase"""
+        try:
+            user_data = self.validate_supabase_token(supabase_token)
+            return {"message": "Email verified successfully"}
+        except Exception as e:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Email verification failed: {str(e)}"
+            )
+
+    # OAuth token management (updated to use UserOAuthToken)
+    def store_oauth_tokens(self, user_id: str, oauth_data: Dict[str, Any], db: Session):
+        """Store OAuth provider tokens for API access"""
+        from models import UserOAuthToken
+        
+        provider = oauth_data.get("provider")
+        if not provider:
+            return
+        
+        # Remove existing provider token
+        db.query(UserOAuthToken).filter(
+            UserOAuthToken.user_id == uuid.UUID(user_id),
+            UserOAuthToken.provider == provider
+        ).delete()
+        
+        # Calculate expiration (default to 1 hour if not provided)
+        expires_at = None
+        if oauth_data.get("expires_in"):
+            expires_at = datetime.utcnow() + timedelta(seconds=oauth_data["expires_in"])
+        else:
+            expires_at = datetime.utcnow() + timedelta(hours=1)
+        
+        # Store new OAuth token
+        oauth_token = UserOAuthToken(
+            user_id=uuid.UUID(user_id),
+            provider=provider,
+            access_token=oauth_data.get("access_token"),
+            refresh_token=oauth_data.get("refresh_token"),
+            expires_at=expires_at,
+            created_at=datetime.utcnow(),
+            updated_at=datetime.utcnow()
+        )
+        
+        db.add(oauth_token)
+        db.commit()
+
+    def get_oauth_token(self, user_id: str, provider: str, db: Session) -> Optional[Dict[str, Any]]:
+        """Get stored OAuth provider token"""
+        from models import UserOAuthToken
+        
+        token = db.query(UserOAuthToken).filter(
+            UserOAuthToken.user_id == uuid.UUID(user_id),
+            UserOAuthToken.provider == provider
+        ).first()
+        
+        if not token:
+            return None
+        
+        is_expired = token.expires_at and token.expires_at < datetime.utcnow()
+        
+        return {
+            "access_token": token.access_token,
+            "refresh_token": token.refresh_token,
+            "expires_at": token.expires_at,
+            "is_expired": is_expired
+        }
+
+    def refresh_oauth_token(self, user_id: str, provider: str, db: Session) -> Optional[Dict[str, Any]]:
+        """Refresh OAuth token if possible (provider-specific implementation needed)"""
+        # This would need provider-specific implementation
+        # For now, return None to indicate refresh not available
+        return None
+
+    def revoke_oauth_token(self, user_id: str, provider: str, db: Session):
+        """Remove OAuth token for a provider"""
+        from models import UserOAuthToken
+        
+        db.query(UserOAuthToken).filter(
+            UserOAuthToken.user_id == uuid.UUID(user_id),
+            UserOAuthToken.provider == provider
+        ).delete()
+        db.commit()
 
 
 # Create a singleton instance

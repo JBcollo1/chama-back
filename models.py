@@ -55,7 +55,30 @@ class AvalancheToken(Base):
     last_updated = Column(DateTime, nullable=True)
 
 
+
+class RefreshToken(Base):
+    """Refresh token model for our own JWT tokens"""
+    __tablename__ = "refresh_tokens"
+    
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    jti = Column(String(36), unique=True, nullable=False)  # JWT ID
+    user_id = Column(UUID(as_uuid=True), ForeignKey("profiles.user_id"), nullable=False)
+    token_hash = Column(Text, nullable=False)  # Hashed token for security
+    expires_at = Column(DateTime, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    is_revoked = Column(Boolean, default=False)
+    
+    # Relationship to Profile
+    profile = relationship("Profile", back_populates="refresh_tokens")
+    
+    __table_args__ = (
+        Index("ix_refresh_tokens_user_id", "user_id"),
+        Index("ix_refresh_tokens_jti", "jti"),
+        Index("ix_refresh_tokens_expires_at", "expires_at"),
+    )
+
 class UserOAuthToken(Base):
+    """OAuth tokens from providers (Google, GitHub, etc.) for API access"""
     __tablename__ = "user_oauth_tokens"
     
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -69,11 +92,11 @@ class UserOAuthToken(Base):
     
     # Relationship to Profile
     profile = relationship("Profile", back_populates="oauth_tokens")
+    
     __table_args__ = (
         UniqueConstraint("user_id", "provider", name="uix_user_provider"),
         Index("ix_user_provider", "user_id", "provider"),
     )
-
 class Profile(Base):
     __tablename__ = "profiles"
     
@@ -92,7 +115,9 @@ class Profile(Base):
     group_memberships = relationship("GroupMember", back_populates="user")
     admin_roles = relationship("GroupAdmin", back_populates="user")
     notifications = relationship("Notification", back_populates="user")
+    refresh_tokens = relationship("RefreshToken", back_populates="profile")
     oauth_tokens = relationship("UserOAuthToken", back_populates="profile")
+
 
 class Group(Base):
     __tablename__ = "groups"
