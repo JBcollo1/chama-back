@@ -202,7 +202,7 @@ class AuthRoutes:
     def verify_token_endpoint(
         self,
         request: Request,
-        credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)
+        credentials: Optional[HTTPAuthorizationCredentials] = Depends(HTTPBearer(auto_error=False))
     ):
         """Verify if the provided token is valid (our own JWT)"""
         token = self.auth_service.get_token_from_cookie_or_header(request, credentials)
@@ -213,8 +213,7 @@ class AuthRoutes:
             "user_id": payload.get("sub"),
             "email": payload.get("email"),
             "expires_at": payload.get("exp")
-        }
-
+    }
     # OAuth route handlers
     def google_oauth_url(self, request: Request) -> OAuthUrlResponse:
         """Generate Google OAuth URL via Supabase"""
@@ -241,33 +240,20 @@ class AuthRoutes:
             # Check for error in callback
             if error:
                 return RedirectResponse(
-                    url=f"{FRONTEND_URL}/login?error={error}",
+                    url=f"{FRONTEND_URL}email-confirm",
                     status_code=status.HTTP_302_FOUND
                 )
             
             if not code:
                 return RedirectResponse(
-                    url=f"{FRONTEND_URL}/login?error=no_code",
+                    url=f"{FRONTEND_URL}email-confirm",
                     status_code=status.HTTP_302_FOUND
                 )
             
             # Handle OAuth callback with Supabase (one-time validation)
             result = self.auth_service.handle_oauth_callback(code, db)
             
-            # Create our own application tokens (not Supabase tokens)
-            access_token = self.auth_service.create_access_token(
-                data={"sub": result["user_id"], "email": result["email"]},
-                expires_delta=timedelta(minutes=15)
-            )
-            refresh_token = self.auth_service.create_refresh_token(
-                data={"sub": result["user_id"], "email": result["email"]}
-            )
-            
-            # Store our refresh token in database
-            self.auth_service.store_refresh_token(result["user_id"], refresh_token, db)
-            
-            # Set HTTP-only cookies with our tokens
-            self.auth_service.set_auth_cookies(response, access_token, refresh_token)
+            auth_response_data = self._create_auth_response(result, response, db)
             
             # Redirect to frontend success page
             redirect_url = f"{FRONTEND_URL}/login/success"
@@ -307,8 +293,8 @@ class AuthRoutes:
         self,
         provider: str,
         request: Request,
-        credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
-        db: Session = Depends(get_db)
+        db: Session = Depends(get_db),
+        credentials: Optional[HTTPAuthorizationCredentials] = Depends(HTTPBearer(auto_error=False))
     ) -> OAuthTokenResponse:
         """Get stored OAuth provider token for API calls"""
         # Uses our own JWT tokens to authenticate
@@ -335,8 +321,8 @@ class AuthRoutes:
         self,
         provider: str,
         request: Request,
-        credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
-        db: Session = Depends(get_db)
+        db: Session = Depends(get_db),
+        credentials: Optional[HTTPAuthorizationCredentials] = Depends(HTTPBearer(auto_error=False))
     ):
         """Remove OAuth provider token"""
         # Uses our own JWT tokens to authenticate
@@ -355,16 +341,16 @@ router = auth_routes.router
 # Export dependency functions for use in other routes
 def get_current_user(
     request: Request,
-    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(HTTPBearer(auto_error=False))
 ) -> Dict[str, Any]:
     """Dependency function to get current authenticated user using our own JWT tokens"""
     return auth_service.get_current_user(request, credentials, db)
 
 def get_current_user_optional(
     request: Request,
-    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(HTTPBearer(auto_error=False))
 ) -> Optional[Dict[str, Any]]:
     """Dependency function to get current user if authenticated, otherwise None"""
     return auth_service.get_current_user_optional(request, credentials, db)
