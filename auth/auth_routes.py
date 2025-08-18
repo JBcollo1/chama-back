@@ -188,8 +188,20 @@ class AuthRoutes:
         db: Session = Depends(get_db)
     ) -> UserProfile:
         """Get current authenticated user profile using our own tokens"""
-        # Uses our own JWT tokens (no Supabase call)
-        user_data = self.auth_service.get_current_user(request, credentials, db)
+        access_token = request.cookies.get("access_token")
+    
+        # Fall back to Authorization header (for API clients)
+        if not access_token and credentials:
+            access_token = credentials.credentials
+        
+        if not access_token:
+            raise HTTPException(
+                status_code=401, 
+                detail="Not authenticated - no token found"
+            )
+        
+        # Get user data using the token
+        user_data = self.auth_service.get_current_user_from_token(access_token, db)
         profile = user_data["profile"]
         
         return UserProfile(
@@ -238,32 +250,59 @@ class AuthRoutes:
         """Handle OAuth callback from Google/GitHub via Supabase"""
         try:
             # Check for error in callback
+            print(f"OAuth callback received:")
+            print(f"  provider: {provider}")
+            print(f"  code: {code}")
+            print(f"  state: {state}")
+            print(f"  error: {error}")
+            print(f"  request.url: {request.url}")
+            print(f"  query_params: {dict(request.query_params)}")
             if error:
                 return RedirectResponse(
-                    url=f"{FRONTEND_URL}daashboard",
+                    url=f"{FRONTEND_URL}dashboard",
                     status_code=status.HTTP_302_FOUND
                 )
             
             if not code:
                 return RedirectResponse(
-                    url=f"{FRONTEND_URL}dashboard",
+                    url=f"{FRONTEND_URL}/dashboard",
                     status_code=status.HTTP_302_FOUND
                 )
             
             # Handle OAuth callback with Supabase (one-time validation)
             result = self.auth_service.handle_oauth_callback(code, db)
             
-            auth_response_data = self._create_auth_response(result, response, db)
+            # Create tokens (but don't set cookies on response yet)
+            user_id = result["user_id"]
+            email = result["email"]
+            display_name = result.get("display_name") or (result.get("profile") and result["profile"].display_name)
             
-            # Redirect to frontend success page
-            redirect_url = f"{FRONTEND_URL}/login/success"
+            # Create our own JWT tokens
+            access_token = self.auth_service.create_access_token(
+                data={"sub": user_id, "email": email},
+                expires_delta=timedelta(minutes=15)
+            )
+            refresh_token = self.auth_service.create_refresh_token(
+                data={"sub": user_id, "email": email}
+            )
+            
+            # Store refresh token in database
+            self.auth_service.store_refresh_token(user_id, refresh_token, db)
+            
+            # Create redirect response
+            redirect_url = f"{FRONTEND_URL}/oauth-callback"  # Use your OAuth callback page
             if result.get("oauth_data") and result["oauth_data"].get("provider"):
                 redirect_url += f"?provider={result['oauth_data']['provider']}"
             
-            return RedirectResponse(
+            redirect_response = RedirectResponse(
                 url=redirect_url,
                 status_code=status.HTTP_302_FOUND
             )
+            
+            # Set cookies on the REDIRECT response
+            self.auth_service.set_auth_cookies(redirect_response, access_token, refresh_token)
+            
+            return redirect_response
             
         except Exception as e:
             print(f"OAuth callback error: {str(e)}")
