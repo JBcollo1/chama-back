@@ -240,13 +240,13 @@ class AuthRoutes:
             # Check for error in callback
             if error:
                 return RedirectResponse(
-                    url=f"{FRONTEND_URL}email-confirm",
+                    url=f"{FRONTEND_URL}daashboard",
                     status_code=status.HTTP_302_FOUND
                 )
             
             if not code:
                 return RedirectResponse(
-                    url=f"{FRONTEND_URL}email-confirm",
+                    url=f"{FRONTEND_URL}dashboard",
                     status_code=status.HTTP_302_FOUND
                 )
             
