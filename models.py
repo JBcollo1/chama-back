@@ -97,12 +97,25 @@ class UserOAuthToken(Base):
         UniqueConstraint("user_id", "provider", name="uix_user_provider"),
         Index("ix_user_provider", "user_id", "provider"),
     )
+# class UserAccountLink(Base):
+#     """Links Supabase auth.users.id to our profiles.user_id for account consolidation"""
+#     __tablename__ = "user_account_links"
+    
+#     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+#     supabase_user_id = Column(UUID(as_uuid=True), unique=True, nullable=False, index=True)
+#     profile_user_id = Column(UUID(as_uuid=True), ForeignKey('profiles.user_id'), nullable=False, index=True)
+#     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    
+  
+#     profile = relationship("Profile", back_populates="account_links")
+
 class Profile(Base):
     __tablename__ = "profiles"
     
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id = Column(UUID(as_uuid=True), nullable=False, unique=True)
     display_name = Column(String, nullable=True)
+    email = Column(String, unique=True, nullable=True, index=True)
     bio = Column(Text, nullable=True)
     avatar_url = Column(String, nullable=True)
     phone_number = Column(String, nullable=True)
@@ -117,6 +130,8 @@ class Profile(Base):
     notifications = relationship("Notification", back_populates="user")
     refresh_tokens = relationship("RefreshToken", back_populates="profile")
     oauth_tokens = relationship("UserOAuthToken", back_populates="profile")
+    # account_links = relationship("UserAccountLink", back_populates="profile")
+
 
 
 class Group(Base):
