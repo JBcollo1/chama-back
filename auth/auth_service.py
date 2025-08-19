@@ -201,7 +201,7 @@ class AuthService:
         
         # First, try to get token from Authorization header
         if credentials:
-            token = credentials.credentials
+            token = credentials.credentials  # FIX: was just 'credentials'
         
         # If not found in header, try cookie
         if not token:
@@ -215,6 +215,7 @@ class AuthService:
             )
         
         return token
+
     
     # User profile utilities
     def create_or_update_profile(self, user_data: Dict[str, Any], db: Session) -> Any:
@@ -384,43 +385,8 @@ class AuthService:
         # Get token from cookie or header
         token = self.get_token_from_cookie_or_header(request, credentials)
         
-        # Verify our own JWT token
-        payload = self.verify_token(token)
-        
-        # Ensure it's an access token
-        if payload.get("type") != "access":
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid token type",
-                headers={"WWW-Authenticate": "Bearer"},
-            )
-        
-        user_id = payload.get("sub")
-        
-        if user_id is None:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid token",
-                headers={"WWW-Authenticate": "Bearer"},
-            )
-        
-        # Get user profile from database
-        from models import Profile
-        profile = db.query(Profile).filter(
-            Profile.user_id == uuid.UUID(user_id)
-        ).first()
-        
-        if not profile:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="User profile not found"
-            )
-        
-        return {
-            "user_id": user_id,
-            "email": payload.get("email"),
-            "profile": profile
-        }
+        # Use the helper method
+        return self.get_current_user_from_token(token, db)
 
     def get_current_user_optional(
         self,
@@ -433,7 +399,72 @@ class AuthService:
             return self.get_current_user(request, credentials, db)
         except HTTPException:
             return None
-
+    def get_current_user_from_token(self, token: str, db: Session) -> Dict[str, Any]:
+        """Get current authenticated user using JWT token directly"""
+        
+        print(f"=== GET CURRENT USER FROM TOKEN DEBUG ===")
+        print(f"Token received: {token[:50]}...")
+        
+        try:
+            # Verify our own JWT token
+            payload = self.verify_token(token)
+            print(f"Token payload: {payload}")
+            
+            # Ensure it's an access token
+            if payload.get("type") != "access":
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Invalid token type",
+                    headers={"WWW-Authenticate": "Bearer"},
+                )
+            
+            user_id = payload.get("sub")
+            
+            if user_id is None:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Invalid token - no user ID",
+                    headers={"WWW-Authenticate": "Bearer"},
+                )
+            
+            print(f"User ID from token: {user_id}")
+            
+            # Get user profile from database
+            from models import Profile
+            profile = db.query(Profile).filter(
+                Profile.user_id == uuid.UUID(user_id)
+            ).first()
+            
+            if not profile:
+                print(f"No profile found for user_id: {user_id}")
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="User profile not found"
+                )
+            
+            print(f"Profile found: {profile.display_name}")
+            print("=== END GET CURRENT USER FROM TOKEN DEBUG ===")
+            
+            return {
+                "user_id": user_id,
+                "email": payload.get("email"),
+                "profile": profile
+            }
+            
+        except HTTPException:
+            print("=== END GET CURRENT USER FROM TOKEN DEBUG ===")
+            raise
+        except Exception as e:
+            print(f"Unexpected error in get_current_user_from_token: {str(e)}")
+            print(f"Error type: {type(e)}")
+            import traceback
+            print(f"Full traceback: {traceback.format_exc()}")
+            print("=== END GET CURRENT USER FROM TOKEN DEBUG ===")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail=f"Token processing failed: {str(e)}",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
     # OAuth operations
     def generate_oauth_url(self, provider: str, request: Request) -> Dict[str, Any]:
         """Generate OAuth URL for the specified provider"""
@@ -441,18 +472,22 @@ class AuthService:
             # Generate state parameter for security
             state = str(uuid.uuid4())
             
-            # Build the redirect URI
-            redirect_uri = f"{request.base_url}api/v1/auth/oauth/callback"
+            # This should redirect to your FRONTEND after successful auth
+            # Supabase will handle the OAuth flow and then redirect here
+            frontend_callback = f"{FRONTEND_URL}oauth-callback"
+            
             print(f"=== OAuth URL Generation Debug ===")
             print(f"Provider: {provider}")
-            print(f"Base URL: {request.base_url}")
-            print(f"Redirect URI: {redirect_uri}")
+            print(f"Frontend callback: {frontend_callback}")
             
             # Create OAuth URL with Supabase
             response = self.supabase.auth.sign_in_with_oauth({
                 "provider": provider,
                 "options": {
-                    "redirect_to": redirect_uri
+                    "redirect_to": frontend_callback,  # Frontend URL, not API URL
+                    "query_params": {
+                        "provider": provider  # Add provider to help identify
+                    }
                 }
             })
             
@@ -470,59 +505,16 @@ class AuthService:
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"Failed to generate {provider} OAuth URL: {str(e)}"
             )
-    def handle_oauth_callback(self, code: str, db: Session) -> Dict[str, Any]:
-        """Handle OAuth callback and return user data"""
-        try:
-            print(f"Attempting to exchange code: {code}")
-            # Exchange code for session with Supabase
-            auth_response = self.supabase.auth.exchange_code_for_session({
-                "auth_code": code
-            })
 
-            print(f"Supabase response: {auth_response}")
-            
-            if not auth_response.user or not auth_response.session:
-                print("Supabase auth response is missing user or session")
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="OAuth authentication failed"
-                )
-            
-            user = auth_response.user
-            user_id = user.id
-            email = user.email
-            
-            # Create or update profile with OAuth data
-            user_data = {
-                "user_id": user_id,
-                "email": email,
-                "user_metadata": user.user_metadata or {}
-            }
-            
-            profile = self.create_or_update_profile(user_data, db)
-            
-            # Store OAuth tokens if available
-            provider_data = None
-            if auth_response.session.provider_token:
-                provider_data = {
-                    "provider": auth_response.session.provider or "unknown",
-                    "access_token": auth_response.session.provider_token,
-                    "refresh_token": auth_response.session.provider_refresh_token,
-                }
-                self.store_oauth_tokens(user_id, provider_data, db)
-            
-            return {
-                "user_id": user_id,
-                "email": email,
-                "profile": profile,
-                "oauth_data": provider_data
-            }
-            
-        except Exception as e:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"OAuth callback failed: {str(e)}"
-            )
+    # Keep the existing handle_oauth_callback method but update it for debugging:
+    def handle_oauth_callback(self, code: str, db: Session) -> Dict[str, Any]:
+        """Handle OAuth callback and return user data - DEPRECATED"""
+        # This method is no longer used in the main flow
+        # OAuth now goes through frontend exchange
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="OAuth callback should go through frontend exchange flow"
+        )
 
     # Account management operations (still use Supabase)
     def reset_password(self, email: str):

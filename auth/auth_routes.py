@@ -91,6 +91,7 @@ class AuthRoutes:
         self.router.add_api_route("/oauth/google", self.google_oauth_url, methods=["GET"], response_model=OAuthUrlResponse)
         self.router.add_api_route("/oauth/github", self.github_oauth_url, methods=["GET"], response_model=OAuthUrlResponse)
         self.router.add_api_route("/oauth/callback", self.oauth_callback, methods=["GET"])
+        self.router.add_api_route("/oauth/exchange", self.oauth_token_exchange, methods=["POST"], response_model=AuthResponse)
         
         # Account management routes (uses Supabase)
         self.router.add_api_route("/reset-password", self.reset_password, methods=["POST"])
@@ -115,13 +116,15 @@ class AuthRoutes:
         refresh_token = self.auth_service.create_refresh_token(
             data={"sub": user_id, "email": email}
         )
-        
+        print(f"Generated access token: {access_token[:50]}...")
+        print(f"Generated refresh token: {refresh_token[:50]}...")
         # Store refresh token in database
         self.auth_service.store_refresh_token(user_id, refresh_token, db)
         
         # Set HTTP-only cookies
         self.auth_service.set_auth_cookies(response, access_token, refresh_token)
-        
+        print("Cookies set successfully")
+        print("=== END CREATE AUTH RESPONSE DEBUG ===")
         return AuthResponse(
             user_id=user_id,
             email=email,
@@ -188,11 +191,19 @@ class AuthRoutes:
         db: Session = Depends(get_db)
     ) -> UserProfile:
         """Get current authenticated user profile using our own tokens"""
+        
+        # Debug logging
+        print("=== GET CURRENT USER PROFILE DEBUG ===")
+        print(f"Cookies: {dict(request.cookies)}")
+        print(f"Credentials: {credentials.credentials if credentials else 'None'}")
+        
         access_token = request.cookies.get("access_token")
-    
+
         # Fall back to Authorization header (for API clients)
         if not access_token and credentials:
             access_token = credentials.credentials
+        
+        print(f"Final access_token: {access_token[:50] if access_token else 'None'}...")
         
         if not access_token:
             raise HTTPException(
@@ -200,16 +211,31 @@ class AuthRoutes:
                 detail="Not authenticated - no token found"
             )
         
-        # Get user data using the token
-        user_data = self.auth_service.get_current_user_from_token(access_token, db)
-        profile = user_data["profile"]
-        
-        return UserProfile(
-            user_id=user_data["user_id"],
-            email=user_data["email"],
-            display_name=profile.display_name,
-            phone_number=profile.phone_number
-        )
+        try:
+            # FIX: Call the method with correct parameters
+            # Instead of: user_data = self.auth_service.get_current_user(access_token, db)
+            # Use a helper method that takes just the token:
+            user_data = self.auth_service.get_current_user_from_token(access_token, db)
+            
+            profile = user_data["profile"]
+            
+            print(f"User data retrieved successfully for user: {user_data.get('email')}")
+            print("=== END DEBUG ===")
+            
+            return UserProfile(
+                user_id=user_data["user_id"],
+                email=user_data["email"],
+                display_name=profile.display_name,
+                phone_number=profile.phone_number
+            )
+            
+        except Exception as e:
+            print(f"Error in get_current_user_profile: {str(e)}")
+            print(f"Error type: {type(e)}")
+            import traceback
+            print(f"Full traceback: {traceback.format_exc()}")
+            print("=== END DEBUG ===")
+            raise
 
     def verify_token_endpoint(
         self,
@@ -236,9 +262,51 @@ class AuthRoutes:
         """Generate GitHub OAuth URL via Supabase"""
         result = self.auth_service.generate_oauth_url("github", request)
         return OAuthUrlResponse(url=result["url"], state=result["state"])
-    
 
-    
+    def oauth_token_exchange(
+        self,
+        request: Request,
+        response: Response,
+        db: Session = Depends(get_db),
+        credentials: HTTPAuthorizationCredentials = Depends(security)
+    ) -> AuthResponse:
+        """Exchange Supabase OAuth token for app tokens"""
+        try:
+            supabase_token = credentials.credentials
+            
+            print("=== TOKEN EXCHANGE DEBUG ===")
+            print(f"Received Supabase token: {supabase_token[:50]}...")
+            
+            # Validate Supabase token and get user info
+            user_data = self.auth_service.validate_supabase_token(supabase_token)
+            print(f"User data from Supabase: {user_data}")
+            
+            # Create or update profile
+            profile = self.auth_service.create_or_update_profile(user_data, db)
+            print(f"Profile created/updated: {profile}")
+            
+            # Create response with your app's tokens
+            auth_response = self._create_auth_response({
+                "user_id": user_data["user_id"],
+                "email": user_data["email"],
+                "profile": profile
+            }, response, db)
+            
+            print(f"Auth response created successfully")
+            print("=== END TOKEN EXCHANGE DEBUG ===")
+            
+            return auth_response
+            
+        except Exception as e:
+            print(f"Token exchange error: {str(e)}")
+            print("=== END TOKEN EXCHANGE DEBUG ===")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Token exchange failed: {str(e)}"
+            )
+
+    # You can remove or simplify the oauth_callback method since it won't be used
+    # But keep it for debugging purposes:
     def oauth_callback(
         self,
         request: Request,
@@ -249,92 +317,11 @@ class AuthRoutes:
         provider: Optional[str] = None,
         db: Session = Depends(get_db)
     ):
-        """Handle OAuth callback from Google/GitHub via Supabase"""
-        try:
-            # Extract all parameters from query params
-            query_params = dict(request.query_params)
-            code = code or query_params.get('code')
-            state = state or query_params.get('state') 
-            error = error or query_params.get('error')
-            provider = provider or query_params.get('provider', 'unknown')
-            
-            print(f"=== OAuth Callback Debug ===")
-            print(f"Full URL: {request.url}")
-            print(f"Method: {request.method}")
-            print(f"Headers: {dict(request.headers)}")
-            print(f"Query params: {query_params}")
-            print(f"Raw query string: {request.url.query}")
-            print(f"  provider: {provider}")
-            print(f"  code: {code}")
-            print(f"  state: {state}")
-            print(f"  error: {error}")
-            print("=== End Debug ===")
-            
-            if error:
-                print(f"OAuth error received: {error}")
-                return RedirectResponse(
-                    url=f"{FRONTEND_URL}/login?error={error}",
-                    status_code=status.HTTP_302_FOUND
-                )
-            
-            if not code:
-                print("No authorization code received! This usually means:")
-                print("1. Redirect URI mismatch between Google Console and your app")
-                print("2. Google is redirecting to a different URL")
-                print("3. Supabase configuration issue")
-                return RedirectResponse(
-                    url=f"{FRONTEND_URL}/login?error=no_code",
-                    status_code=status.HTTP_302_FOUND
-                )
-            
-            # Handle OAuth callback - the provider will be detected from the session
-            result = self.auth_service.handle_oauth_callback(code, db)
-            
-            # Extract provider from the OAuth data
-            actual_provider = "unknown"
-            if result.get("oauth_data") and result["oauth_data"].get("provider"):
-                actual_provider = result["oauth_data"]["provider"]
-            
-            print(f"OAuth successful for provider: {actual_provider}")
-            
-            # Create tokens and redirect response
-            user_id = result["user_id"]
-            email = result["email"]
-            
-            # Create JWT tokens
-            access_token = self.auth_service.create_access_token(
-                data={"sub": user_id, "email": email},
-                expires_delta=timedelta(minutes=15)
-            )
-            refresh_token = self.auth_service.create_refresh_token(
-                data={"sub": user_id, "email": email}
-            )
-            
-            # Store refresh token
-            self.auth_service.store_refresh_token(user_id, refresh_token, db)
-            
-            # Create redirect response
-            redirect_url = f"{FRONTEND_URL}/oauth-callback"
-            if actual_provider != "unknown":
-                redirect_url += f"?provider={actual_provider}"
-            
-            redirect_response = RedirectResponse(
-                url=redirect_url,
-                status_code=status.HTTP_302_FOUND
-            )
-            
-            # Set cookies on the redirect response
-            self.auth_service.set_auth_cookies(redirect_response, access_token, refresh_token)
-            
-            print(f"Redirecting to: {redirect_url}")
-            return redirect_response
-            
-        except Exception as e:
-            print(f"OAuth callback error: {str(e)}")
-            return RedirectResponse(
-                url=f"{FRONTEND_URL}/login?error=callback_failed",
-                status_code=status.HTTP_302_FOUND
-            )
+        """Debug endpoint - OAuth flow now goes through frontend"""
+        return RedirectResponse(
+            url=f"{FRONTEND_URL}/login?error=deprecated_endpoint",
+            status_code=status.HTTP_302_FOUND
+        )
 
     # Account management routes (still use Supabase for these operations)
     def reset_password(self, reset_data: PasswordResetRequest):
