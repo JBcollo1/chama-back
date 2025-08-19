@@ -236,48 +236,72 @@ class AuthRoutes:
         """Generate GitHub OAuth URL via Supabase"""
         result = self.auth_service.generate_oauth_url("github", request)
         return OAuthUrlResponse(url=result["url"], state=result["state"])
+    
 
+    
     def oauth_callback(
         self,
         request: Request,
         response: Response,
-        provider: str,
         code: Optional[str] = None,
         state: Optional[str] = None,
         error: Optional[str] = None,
+        provider: Optional[str] = None,
         db: Session = Depends(get_db)
     ):
         """Handle OAuth callback from Google/GitHub via Supabase"""
         try:
-            # Check for error in callback
-            print(f"OAuth callback received:")
+            # Extract all parameters from query params
+            query_params = dict(request.query_params)
+            code = code or query_params.get('code')
+            state = state or query_params.get('state') 
+            error = error or query_params.get('error')
+            provider = provider or query_params.get('provider', 'unknown')
+            
+            print(f"=== OAuth Callback Debug ===")
+            print(f"Full URL: {request.url}")
+            print(f"Method: {request.method}")
+            print(f"Headers: {dict(request.headers)}")
+            print(f"Query params: {query_params}")
+            print(f"Raw query string: {request.url.query}")
             print(f"  provider: {provider}")
             print(f"  code: {code}")
             print(f"  state: {state}")
             print(f"  error: {error}")
-            print(f"  request.url: {request.url}")
-            print(f"  query_params: {dict(request.query_params)}")
+            print("=== End Debug ===")
+            
             if error:
+                print(f"OAuth error received: {error}")
                 return RedirectResponse(
-                    url=f"{FRONTEND_URL}dashboard",
+                    url=f"{FRONTEND_URL}/login?error={error}",
                     status_code=status.HTTP_302_FOUND
                 )
             
             if not code:
+                print("No authorization code received! This usually means:")
+                print("1. Redirect URI mismatch between Google Console and your app")
+                print("2. Google is redirecting to a different URL")
+                print("3. Supabase configuration issue")
                 return RedirectResponse(
-                    url=f"{FRONTEND_URL}/dashboard",
+                    url=f"{FRONTEND_URL}/login?error=no_code",
                     status_code=status.HTTP_302_FOUND
                 )
             
-            # Handle OAuth callback with Supabase (one-time validation)
+            # Handle OAuth callback - the provider will be detected from the session
             result = self.auth_service.handle_oauth_callback(code, db)
             
-            # Create tokens (but don't set cookies on response yet)
+            # Extract provider from the OAuth data
+            actual_provider = "unknown"
+            if result.get("oauth_data") and result["oauth_data"].get("provider"):
+                actual_provider = result["oauth_data"]["provider"]
+            
+            print(f"OAuth successful for provider: {actual_provider}")
+            
+            # Create tokens and redirect response
             user_id = result["user_id"]
             email = result["email"]
-            display_name = result.get("display_name") or (result.get("profile") and result["profile"].display_name)
             
-            # Create our own JWT tokens
+            # Create JWT tokens
             access_token = self.auth_service.create_access_token(
                 data={"sub": user_id, "email": email},
                 expires_delta=timedelta(minutes=15)
@@ -286,22 +310,23 @@ class AuthRoutes:
                 data={"sub": user_id, "email": email}
             )
             
-            # Store refresh token in database
+            # Store refresh token
             self.auth_service.store_refresh_token(user_id, refresh_token, db)
             
             # Create redirect response
-            redirect_url = f"{FRONTEND_URL}/oauth-callback"  # Use your OAuth callback page
-            if result.get("oauth_data") and result["oauth_data"].get("provider"):
-                redirect_url += f"?provider={result['oauth_data']['provider']}"
+            redirect_url = f"{FRONTEND_URL}/oauth-callback"
+            if actual_provider != "unknown":
+                redirect_url += f"?provider={actual_provider}"
             
             redirect_response = RedirectResponse(
                 url=redirect_url,
                 status_code=status.HTTP_302_FOUND
             )
             
-            # Set cookies on the REDIRECT response
+            # Set cookies on the redirect response
             self.auth_service.set_auth_cookies(redirect_response, access_token, refresh_token)
             
+            print(f"Redirecting to: {redirect_url}")
             return redirect_response
             
         except Exception as e:

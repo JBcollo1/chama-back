@@ -441,13 +441,23 @@ class AuthService:
             # Generate state parameter for security
             state = str(uuid.uuid4())
             
+            # Build the redirect URI
+            redirect_uri = f"{request.base_url}api/v1/auth/oauth/callback"
+            print(f"=== OAuth URL Generation Debug ===")
+            print(f"Provider: {provider}")
+            print(f"Base URL: {request.base_url}")
+            print(f"Redirect URI: {redirect_uri}")
+            
             # Create OAuth URL with Supabase
             response = self.supabase.auth.sign_in_with_oauth({
                 "provider": provider,
                 "options": {
-                    "redirect_to": f"{request.base_url}api/v1/auth/oauth/callback?provider={provider}"
+                    "redirect_to": redirect_uri
                 }
             })
+            
+            print(f"Generated OAuth URL: {response.url}")
+            print("=== End Debug ===")
             
             return {
                 "url": response.url,
@@ -455,20 +465,24 @@ class AuthService:
             }
             
         except Exception as e:
+            print(f"OAuth URL generation error: {str(e)}")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"Failed to generate {provider} OAuth URL: {str(e)}"
             )
-
     def handle_oauth_callback(self, code: str, db: Session) -> Dict[str, Any]:
         """Handle OAuth callback and return user data"""
         try:
+            print(f"Attempting to exchange code: {code}")
             # Exchange code for session with Supabase
             auth_response = self.supabase.auth.exchange_code_for_session({
                 "auth_code": code
             })
+
+            print(f"Supabase response: {auth_response}")
             
             if not auth_response.user or not auth_response.session:
+                print("Supabase auth response is missing user or session")
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail="OAuth authentication failed"
