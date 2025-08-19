@@ -472,8 +472,7 @@ class AuthService:
             # Generate state parameter for security
             state = str(uuid.uuid4())
             
-            # This should redirect to your FRONTEND after successful auth
-            # Supabase will handle the OAuth flow and then redirect here
+          
             frontend_callback = f"{FRONTEND_URL}oauth-callback"
             
             print(f"=== OAuth URL Generation Debug ===")
