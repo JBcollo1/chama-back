@@ -174,16 +174,17 @@ class AuthService:
     def set_auth_cookies(self, response: Response, access_token: str, refresh_token: str):
         """Set HTTP-only cookies for tokens"""
         # Only use secure cookies in production (HTTPS)
-        is_production = os.getenv("ENVIRONMENT") == "production"
+        is_prod = os.getenv("ENV") == "production"
         
         response.set_cookie(
             key="access_token",
             value=access_token,
             httponly=True,
-            secure=False,  
-            samesite="lax" ,  
-            max_age=900,  
-            path="/", 
+            secure=is_prod,         # True in production
+            samesite="none" if is_prod else "lax",  
+            max_age=2592000,        # 30 days
+            path="/",
+
         )
         response.set_cookie(
             key="refresh_token",
