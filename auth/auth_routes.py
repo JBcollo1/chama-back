@@ -151,15 +151,41 @@ class AuthRoutes:
 
     def login(self, user_data: UserLogin, response: Response, db: Session = Depends(get_db)) -> AuthResponse:
         """Login user with Supabase Auth and return our own tokens"""
-        # Authenticate with Supabase (one-time validation)
-        result = self.auth_service.login_user(
-            email=user_data.email,
-            password=user_data.password,
-            db=db
-        )
-        
-        # Create our own tokens and return them
-        return self._create_auth_response(result, response, db)
+        try:
+            print(f"=== LOGIN DEBUG ===")
+            print(f"Login attempt for email: {user_data.email}")
+            print(f"Environment: {os.getenv('ENV', 'development')}")
+            
+            # Authenticate with Supabase (one-time validation)
+            result = self.auth_service.login_user(
+                email=user_data.email,
+                password=user_data.password,
+                db=db
+            )
+            
+            print(f"Supabase authentication successful for user: {result.get('user_id')}")
+            
+            # Create our own tokens and return them
+            auth_response = self._create_auth_response(result, response, db)
+            
+            print(f"Auth response created successfully")
+            print("=== END LOGIN DEBUG ===")
+            
+            return auth_response
+            
+        except HTTPException as e:
+            print(f"HTTPException during login: {e.detail}")
+            print("=== END LOGIN DEBUG ===")
+            raise
+        except Exception as e:
+            print(f"Unexpected error during login: {str(e)}")
+            import traceback
+            print(f"Traceback: {traceback.format_exc()}")
+            print("=== END LOGIN DEBUG ===")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Login failed: {str(e)}"
+            )
 
     def refresh_token(self, token_data: TokenRefresh, response: Response, db: Session = Depends(get_db)) -> AuthResponse:
         """Refresh access token using our own refresh token stored in database"""
