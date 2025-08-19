@@ -50,7 +50,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[
     "http://localhost:8080",  
-    "https://chamaweb3.netlify.app/"  
+    "https://chama3.netlify.app/"  
 ],
 
     allow_credentials=True,
