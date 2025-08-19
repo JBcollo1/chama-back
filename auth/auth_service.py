@@ -181,7 +181,7 @@ class AuthService:
             value=access_token,
             httponly=True,
             secure=False,  
-            samesite="None" ,  
+            samesite="lax" ,  
             max_age=900,  
             path="/", 
         )
@@ -190,7 +190,7 @@ class AuthService:
             value=refresh_token,
             httponly=True,
             secure=False,  # Only secure in production
-            samesite="None" ,  
+            samesite="lax" ,  
             max_age=2592000,  # 30 days
             path="/",  
         )
