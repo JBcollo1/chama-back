@@ -176,25 +176,50 @@ class AuthService:
         # Only use secure cookies in production (HTTPS)
         is_prod = os.getenv("ENV") == "production"
         
+        # Get the frontend domain for production
+        frontend_url = os.getenv("FRONTEND_URL", "http://localhost:3000")
+        
+        # Extract domain from frontend URL for production
+        domain = None
+        if is_prod and frontend_url:
+            from urllib.parse import urlparse
+            parsed = urlparse(frontend_url)
+            # Set domain if it's not localhost
+            if parsed.hostname and parsed.hostname != 'localhost':
+                domain = f".{parsed.hostname}"  # Use subdomain wildcard
+        
+        print(f"=== COOKIE DEBUG ===")
+        print(f"Environment: {'production' if is_prod else 'development'}")
+        print(f"Frontend URL: {frontend_url}")
+        print(f"Cookie domain: {domain}")
+        print(f"Secure: {is_prod}")
+        print(f"SameSite: {'none' if is_prod else 'lax'}")
+        
+        cookie_settings = {
+            "httponly": True,
+            "secure": is_prod,  
+            "samesite": "None" if is_prod else "Lax",
+            "max_age": 2592000,  # 30 days
+            "path": "/",
+        }
+        
+        
+        if domain:
+            cookie_settings["domain"] = domain
+        
         response.set_cookie(
             key="access_token",
             value=access_token,
-            httponly=True,
-            secure=is_prod,         # True in production
-            samesite="none" if is_prod else "lax",  
-            max_age=2592000,        # 30 days
-            path="/",
-
+            **cookie_settings
         )
+        
         response.set_cookie(
             key="refresh_token",
             value=refresh_token,
-            httponly=True,
-            secure=False,  # Only secure in production
-            samesite="lax" ,  
-            max_age=2592000,  # 30 days
-            path="/",  
+            **cookie_settings
         )
+        
+        print("=== END COOKIE DEBUG ===")
 
     def get_token_from_cookie_or_header(self, request: Request, credentials: Optional[HTTPAuthorizationCredentials] = None) -> str:
         """Get token from cookie or Authorization header"""
@@ -305,19 +330,62 @@ class AuthService:
     def login_user(self, email: str, password: str, db: Session) -> Dict[str, Any]:
         """Login user with Supabase Auth"""
         try:
+            print(f"=== SUPABASE LOGIN DEBUG ===")
+            print(f"Attempting Supabase auth for: {email}")
+            print(f"Supabase URL: {SUPABASE_URL}")
+            print(f"Using anon key: {SUPABASE_ANON_KEY[:20]}..." if SUPABASE_ANON_KEY else "No anon key")
+            
+            # Test Supabase connection first
+            try:
+                test_response = self.supabase.table('profiles').select('*').limit(1).execute()
+                print(f"Supabase connection test: {'SUCCESS' if test_response else 'FAILED'}")
+            except Exception as conn_error:
+                print(f"Supabase connection test FAILED: {str(conn_error)}")
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail="Database connection failed"
+                )
+            
             # Authenticate with Supabase
+            print(f"Calling Supabase sign_in_with_password...")
             auth_response = self.supabase.auth.sign_in_with_password({
                 "email": email,
                 "password": password,
             })
             
+            print(f"Supabase auth call completed")
+            print(f"Auth response type: {type(auth_response)}")
+            print(f"Has user: {hasattr(auth_response, 'user')}")
+            print(f"Has session: {hasattr(auth_response, 'session')}")
+            
+            # Check if we got a proper response
+            if not hasattr(auth_response, 'user') or not hasattr(auth_response, 'session'):
+                print(f"Invalid auth response structure: {dir(auth_response)}")
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="Authentication service error"
+                )
+            
+            print(f"User: {auth_response.user.id if auth_response.user else 'None'}")
+            print(f"Session: {'exists' if auth_response.session else 'None'}")
+            
             if auth_response.user is None or auth_response.session is None:
+                print("Invalid credentials - user or session is None")
+                # Check if there's an error in the response
+                error_msg = "Invalid email or password"
+                if hasattr(auth_response, 'error') and auth_response.error:
+                    error_msg = f"Supabase error: {auth_response.error}"
+                    print(f"Supabase error details: {auth_response.error}")
+                
                 raise HTTPException(
                     status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="Invalid email or password"
+                    detail=error_msg
                 )
             
             user_id = auth_response.user.id
+            user_email = auth_response.user.email
+            print(f"User ID: {user_id}")
+            print(f"User Email: {user_email}")
             
             # Get user profile from database
             from models import Profile
@@ -325,17 +393,48 @@ class AuthService:
                 Profile.user_id == uuid.UUID(user_id)
             ).first()
             
+            print(f"Profile found: {profile.display_name if profile else 'None'}")
+            print("=== END SUPABASE LOGIN DEBUG ===")
+            
             return {
                 "user_id": user_id,
-                "email": email,
+                "email": user_email,
                 "profile": profile
             }
             
+        except HTTPException:
+            print("=== END SUPABASE LOGIN DEBUG ===")
+            raise
         except Exception as e:
+            print(f"Supabase login error: {str(e)}")
+            print(f"Error type: {type(e)}")
+            print(f"Error args: {getattr(e, 'args', 'No args')}")
+            
+            # Check for specific Supabase errors
+            if hasattr(e, 'message'):
+                print(f"Error message: {e.message}")
+            if hasattr(e, 'details'):
+                print(f"Error details: {e.details}")
+            if hasattr(e, 'code'):
+                print(f"Error code: {e.code}")
+                
+            import traceback
+            print(f"Traceback: {traceback.format_exc()}")
+            print("=== END SUPABASE LOGIN DEBUG ===")
+            
+            # Provide more specific error message
+            error_detail = "Authentication service unavailable"
+            if "network" in str(e).lower() or "connection" in str(e).lower():
+                error_detail = "Unable to connect to authentication service"
+            elif "invalid" in str(e).lower():
+                error_detail = "Invalid email or password"
+                
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid email or password"
+                detail=error_detail
             )
+
+
 
     def refresh_user_token(self, refresh_token: str, db: Session) -> Dict[str, Any]:
         """Refresh access token using refresh token stored in database"""
