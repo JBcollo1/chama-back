@@ -111,7 +111,7 @@ class AuthRoutes:
         # Create our own JWT tokens
         access_token = self.auth_service.create_access_token(
             data={"sub": user_id, "email": email},
-            expires_delta=timedelta(minutes=15)
+            expires_delta=timedelta(hours=24)
         )
         refresh_token = self.auth_service.create_refresh_token(
             data={"sub": user_id, "email": email}
