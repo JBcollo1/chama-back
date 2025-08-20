@@ -13,7 +13,7 @@ from auth.auth_service import auth_service
 FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3000")
 
 # Security
-security = HTTPBearer()
+security = HTTPBearer(auto_error=False)
 
 # Pydantic models for authentication
 class UserRegister(BaseModel):
