@@ -336,15 +336,15 @@ class AuthService:
             print(f"Using anon key: {SUPABASE_ANON_KEY[:20]}..." if SUPABASE_ANON_KEY else "No anon key")
             
             # Test Supabase connection first
-            try:
-                test_response = self.supabase_admin.table('profiles').select('*').limit(1).execute()
-                print(f"Supabase connection test: {'SUCCESS' if test_response else 'FAILED'}")
-            except Exception as conn_error:
-                print(f"Supabase connection test FAILED: {str(conn_error)}")
-                raise HTTPException(
-                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                    detail="Database connection failed"
-                )
+            # try:
+            #     test_response = self.supabase_admin.table('profiles').select('*').limit(1).execute()
+            #     print(f"Supabase connection test: {'SUCCESS' if test_response else 'FAILED'}")
+            # except Exception as conn_error:
+            #     print(f"Supabase connection test FAILED: {str(conn_error)}")
+            #     raise HTTPException(
+            #         status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            #         detail="Database connection failed"
+            #     )
             
             # Authenticate with Supabase
             print(f"Calling Supabase sign_in_with_password...")
