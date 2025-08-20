@@ -337,7 +337,7 @@ class AuthService:
             
             # Test Supabase connection first
             try:
-                test_response = self.supabase.table('profiles').select('*').limit(1).execute()
+                test_response = self.supabase_admin.table('profiles').select('*').limit(1).execute()
                 print(f"Supabase connection test: {'SUCCESS' if test_response else 'FAILED'}")
             except Exception as conn_error:
                 print(f"Supabase connection test FAILED: {str(conn_error)}")
