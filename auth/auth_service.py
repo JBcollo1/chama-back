@@ -225,18 +225,24 @@ class AuthService:
         """Get token from cookie or Authorization header"""
         token = None
         
-        # First, try to get token from Authorization header
-        if credentials:
-            token = credentials.credentials  # FIX: was just 'credentials'
+        print("=== TOKEN EXTRACTION DEBUG ===")
+        print(f"Request cookies: {dict(request.cookies)}")
+        print(f"Authorization credentials: {credentials.credentials if credentials else 'None'}")
         
-        # If not found in header, try cookie
-        if not token:
-            token = request.cookies.get("access_token")
+        token = request.cookies.get("access_token")
+        print(f"Token from cookie: {token[:50] if token else 'None'}...")
+        
+        
+        if not token and credentials:
+            token = credentials.credentials
+            print(f"Token from header: {token[:50] if token else 'None'}...")
+        
+        print("=== END TOKEN EXTRACTION DEBUG ===")
         
         if not token:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="No token provided",
+                detail="No token provided - check cookies and Authorization header",
                 headers={"WWW-Authenticate": "Bearer"},
             )
         
