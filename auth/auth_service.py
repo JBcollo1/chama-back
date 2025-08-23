@@ -176,22 +176,8 @@ class AuthService:
         # Only use secure cookies in production (HTTPS)
         is_prod = os.getenv("ENV") == "production"
         
-        # Get the frontend domain for production
-        frontend_url = os.getenv("FRONTEND_URL", "http://localhost:3000")
-        
-        # Extract domain from frontend URL for production
-        domain = None
-        if is_prod and frontend_url:
-            from urllib.parse import urlparse
-            parsed = urlparse(frontend_url)
-            # Set domain if it's not localhost
-            if parsed.hostname and parsed.hostname != 'localhost':
-                domain = f".{parsed.hostname}"  # Use subdomain wildcard
-        
         print(f"=== COOKIE DEBUG ===")
         print(f"Environment: {'production' if is_prod else 'development'}")
-        print(f"Frontend URL: {frontend_url}")
-        print(f"Cookie domain: {domain}")
         print(f"Secure: {is_prod}")
         print(f"SameSite: {'none' if is_prod else 'lax'}")
         
@@ -201,11 +187,8 @@ class AuthService:
             "samesite": "None" if is_prod else "Lax",
             "max_age": 2592000,  # 30 days
             "path": "/",
+            # REMOVE ALL DOMAIN LOGIC - Don't set domain for cross-origin
         }
-        
-        
-        if domain:
-            cookie_settings["domain"] = domain
         
         response.set_cookie(
             key="access_token",
@@ -220,7 +203,6 @@ class AuthService:
         )
         
         print("=== END COOKIE DEBUG ===")
-
     def get_token_from_cookie_or_header(self, request: Request, credentials: Optional[HTTPAuthorizationCredentials] = None) -> str:
         """Get token from cookie or Authorization header"""
         token = None
@@ -229,10 +211,11 @@ class AuthService:
         print(f"Request cookies: {dict(request.cookies)}")
         print(f"Authorization credentials: {credentials.credentials if credentials else 'None'}")
         
+        # IMPORTANT: Check cookies FIRST since that's your primary auth method
         token = request.cookies.get("access_token")
         print(f"Token from cookie: {token[:50] if token else 'None'}...")
         
-        
+        # Only fall back to header if no cookie token
         if not token and credentials:
             token = credentials.credentials
             print(f"Token from header: {token[:50] if token else 'None'}...")
@@ -341,9 +324,9 @@ class AuthService:
             print(f"Supabase URL: {SUPABASE_URL}")
             print(f"Using anon key: {SUPABASE_ANON_KEY[:20]}..." if SUPABASE_ANON_KEY else "No anon key")
             
-            # Test Supabase connection first
+            
             # try:
-            #     test_response = self.supabase_admin.table('profiles').select('*').limit(1).execute()
+            #     test_response = self.supabase.table("_supabase_migrations").select("*").limit(1).execute()
             #     print(f"Supabase connection test: {'SUCCESS' if test_response else 'FAILED'}")
             # except Exception as conn_error:
             #     print(f"Supabase connection test FAILED: {str(conn_error)}")
@@ -352,7 +335,7 @@ class AuthService:
             #         detail="Database connection failed"
             #     )
             
-            # Authenticate with Supabase
+            
             print(f"Calling Supabase sign_in_with_password...")
             auth_response = self.supabase.auth.sign_in_with_password({
                 "email": email,
