@@ -133,7 +133,6 @@ class Profile(Base):
     # account_links = relationship("UserAccountLink", back_populates="profile")
 
 
-
 class Group(Base):
     __tablename__ = "groups"
     
@@ -151,7 +150,15 @@ class Group(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     approval_required = Column(Boolean, default=False)
     emergency_withdraw_allowed = Column(Boolean, default=False)
-    
+
+   
+    contract_address = Column(String(42), nullable=True, unique=True, index=True)  
+    creation_tx_hash = Column(String(66), nullable=True, unique=True)  
+    creation_block_number = Column(Integer, nullable=True)
+    network_id = Column(Integer, nullable=True)  
+    is_blockchain_synced = Column(Boolean, default=False)
+    last_blockchain_sync = Column(DateTime, nullable=True)
+
     # Relationships
     member_punishments = relationship("MemberPunishment", back_populates="group", cascade="all, delete-orphan")
     creator = relationship("Profile", back_populates="created_groups")
@@ -159,6 +166,7 @@ class Group(Base):
     admins = relationship("GroupAdmin", back_populates="group")
     contributions = relationship("Contribution", back_populates="group")
     notifications = relationship("Notification", back_populates="group")
+
 
 class GroupMember(Base):
     __tablename__ = "group_members"

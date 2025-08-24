@@ -108,9 +108,7 @@ class GroupRoutes:
             
             print(f"📦 Creating database record with: {group_dict}")
             
-            allowed_fields = {c.name for c in Group.__table__.columns}
-            db_group = Group(**{k: v for k, v in group_dict.items() if k in allowed_fields})
-
+            db_group = Group(**group_dict)
             db.add(db_group)
             db.commit()
             db.refresh(db_group)
