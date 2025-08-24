@@ -48,6 +48,8 @@ class GroupCreate(GroupBase):
     end_date: Optional[datetime] = None
     contribution_frequency: Optional[str] = "weekly"
     approval_required: Optional[bool] = True
+    wallet_address: Optional[str] = Field(None, pattern="^0x[a-fA-F0-9]{40}$")
+    network_info: Optional[dict] = None
     created_by: UUID
 class GroupUpdate(BaseSchema):
     name: Optional[str] = None

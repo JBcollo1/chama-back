@@ -56,23 +56,48 @@ class GroupRoutes:
         if not creator:
             raise HTTPException(status_code=404, detail="Creator profile not found")
         
-      
-        creator_address = getattr(creator, 'wallet_address', None)
+        # Use wallet address from the request data instead of user profile
+        creator_address = group_data.wallet_address
         if not creator_address:
-            raise HTTPException(status_code=400, detail="Creator wallet address not found. Please connect your wallet first.")
+            raise HTTPException(status_code=400, detail="Wallet address is required to create blockchain-enabled groups.")
+        
+        # Validate wallet address format (basic validation)
+        if not creator_address.startswith('0x') or len(creator_address) != 42:
+            raise HTTPException(status_code=400, detail="Invalid wallet address format.")
+        
+        print(f"🏠 Using wallet address from request: {creator_address}")
+        print(f"👤 Creating group for user: {group_data.created_by}")
+        print(f"📝 Group data: {group_data.model_dump()}")
         
         try:
+            # Optionally update the user's profile with the wallet address if it's not already set
+            # if not creator.wallet_address:
+            #     print(f"💾 Saving wallet address to user profile: {creator_address}")
+            #     creator.wallet_address = creator_address
+            #     db.add(creator)
+               
+            
             # Create group on blockchain first
+            print("🔗 Creating group on blockchain...")
             blockchain_result = await self.web3_service.create_group_on_blockchain(group_data, creator_address)
             
             if not blockchain_result['success']:
+                print(f"❌ Blockchain creation failed: {blockchain_result['error']}")
                 raise HTTPException(
                     status_code=500, 
                     detail=f"Blockchain group creation failed: {blockchain_result['error']}"
                 )
             
+            print(f"✅ Blockchain group created: {blockchain_result}")
+            
             # Create group in database with blockchain info
             group_dict = group_data.model_dump()
+            
+            # Remove fields that aren't in the database model
+            group_dict.pop('wallet_address', None)
+            group_dict.pop('network_info', None)
+            
+            # Add blockchain info
             group_dict.update({
                 'contract_address': blockchain_result['group_address'],
                 'creation_tx_hash': blockchain_result['tx_hash'],
@@ -81,10 +106,16 @@ class GroupRoutes:
                 'last_blockchain_sync': datetime.utcnow()
             })
             
-            db_group = Group(**group_dict)
+            print(f"📦 Creating database record with: {group_dict}")
+            
+            allowed_fields = {c.name for c in Group.__table__.columns}
+            db_group = Group(**{k: v for k, v in group_dict.items() if k in allowed_fields})
+
             db.add(db_group)
             db.commit()
             db.refresh(db_group)
+            
+            print(f"✅ Database group created with ID: {db_group.id}")
             
             # Add creator as admin
             admin_data = GroupAdminCreate(
@@ -104,6 +135,8 @@ class GroupRoutes:
             
             db.commit()
             
+            print("✅ Creator added as admin and member")
+            
             # Create response with blockchain info
             response = GroupResponse.model_validate(db_group)
             response.blockchain_info = {
@@ -114,12 +147,18 @@ class GroupRoutes:
                 'verified': True
             }
             
+            print(f"🎉 Group creation completed successfully: {response.id}")
             return response
             
         except HTTPException:
+            db.rollback()
             raise
         except Exception as e:
             db.rollback()
+            print(f"❌ Group creation failed with error: {str(e)}")
+            print(f"❌ Error type: {type(e)}")
+            import traceback
+            print(f"❌ Traceback: {traceback.format_exc()}")
             raise HTTPException(status_code=500, detail=f"Group creation failed: {str(e)}")
     
     def get_groups(
