@@ -298,17 +298,17 @@ class GroupRoutes:
             raise HTTPException(status_code=404, detail="User not found")
         
         # Check if wallet address is required and provided
-        wallet_address = getattr(member_data, 'wallet_address', None)
-        if group.contract_address:  # This is a blockchain group
-            if not wallet_address:
-                raise HTTPException(
-                    status_code=400, 
-                    detail="Wallet address is required to join blockchain-enabled groups."
-                )
+        # wallet_address = getattr(member_data, 'wallet_address', None)
+        # if group.contract_address:  # This is a blockchain group
+        #     if not wallet_address:
+        #         raise HTTPException(
+        #             status_code=400, 
+        #             detail="Wallet address is required to join blockchain-enabled groups."
+        #         )
             
-            # Validate wallet address format
-            if not wallet_address.startswith('0x') or len(wallet_address) != 42:
-                raise HTTPException(status_code=400, detail="Invalid wallet address format.")
+        #     # Validate wallet address format
+        #     if not wallet_address.startswith('0x') or len(wallet_address) != 42:
+        #         raise HTTPException(status_code=400, detail="Invalid wallet address format.")
         
         # Check if user is already a member
         existing_member = db.query(GroupMember).filter(
