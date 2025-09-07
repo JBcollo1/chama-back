@@ -284,9 +284,9 @@ class GroupRoutes:
         
         return {"message": "Group marked as inactive (blockchain groups cannot be deleted)"}
     
-    # Member management methods remain the same as original
-    def add_member(self, group_id: UUID, member_data: GroupMemberCreate, db: Session = Depends(get_db)) -> GroupMemberResponse:
-        """Add a member to a group"""
+    # Updated add_member method with wallet requirement
+    async def add_member(self, group_id: UUID, member_data: GroupMemberCreate, db: Session = Depends(get_db)) -> GroupMemberResponse:
+        """Add a member to a group - requires wallet address for blockchain groups"""
         # Verify group exists
         group = db.query(Group).filter(Group.id == group_id).first()
         if not group:
@@ -296,6 +296,19 @@ class GroupRoutes:
         user = db.query(Profile).filter(Profile.user_id == member_data.user_id).first()
         if not user:
             raise HTTPException(status_code=404, detail="User not found")
+        
+        # Check if wallet address is required and provided
+        wallet_address = getattr(member_data, 'wallet_address', None)
+        if group.contract_address:  # This is a blockchain group
+            if not wallet_address:
+                raise HTTPException(
+                    status_code=400, 
+                    detail="Wallet address is required to join blockchain-enabled groups."
+                )
+            
+            # Validate wallet address format
+            if not wallet_address.startswith('0x') or len(wallet_address) != 42:
+                raise HTTPException(status_code=400, detail="Invalid wallet address format.")
         
         # Check if user is already a member
         existing_member = db.query(GroupMember).filter(
@@ -313,17 +326,80 @@ class GroupRoutes:
         if active_members >= group.max_members:
             raise HTTPException(status_code=400, detail="Group is at maximum capacity")
         
-        # Create member
-        db_member = GroupMember(
-            group_id=group_id,
-            user_id=member_data.user_id,
-            status=MemberStatus.pending
-        )
-        db.add(db_member)
-        db.commit()
-        db.refresh(db_member)
+        print(f"💫 Adding member to group: {group_id}")
+        print(f"👤 User ID: {member_data.user_id}")
+        print(f"🏠 Wallet address: {wallet_address}")
+        print(f"🔗 Group contract: {group.contract_address}")
         
-        return GroupMemberResponse.model_validate(db_member)
+        try:
+            # For blockchain groups, interact with smart contract first
+            if group.contract_address and wallet_address:
+                print("🔗 Joining group on blockchain...")
+                
+                # Call blockchain join function
+                blockchain_result = await self.web3_service.join_group_on_blockchain(
+                    group.contract_address, 
+                    wallet_address
+                )
+                
+                if not blockchain_result['success']:
+                    print(f"❌ Blockchain join failed: {blockchain_result['error']}")
+                    raise HTTPException(
+                        status_code=500, 
+                        detail=f"Blockchain group join failed: {blockchain_result['error']}"
+                    )
+                
+                print(f"✅ Successfully joined group on blockchain: {blockchain_result}")
+            
+            # Create member in database
+            member_dict = member_data.model_dump()
+            
+            # Remove wallet_address from dict if it exists (assuming it's not in the database model)
+            member_dict.pop('wallet_address', None)
+            
+            # Set appropriate status based on group settings
+            if group.contract_address:
+                # For blockchain groups, member is active immediately after successful blockchain join
+                status = MemberStatus.active
+            else:
+                # For non-blockchain groups, use pending status
+                status = MemberStatus.pending
+            
+            db_member = GroupMember(
+                group_id=group_id,
+                user_id=member_data.user_id,
+                status=status
+            )
+            
+            db.add(db_member)
+            db.commit()
+            db.refresh(db_member)
+            
+            print(f"✅ Database member created with ID: {db_member.id}")
+            
+            # Create response with blockchain info if applicable
+            response = GroupMemberResponse.model_validate(db_member)
+            if group.contract_address and wallet_address:
+                response.blockchain_info = {
+                    'wallet_address': wallet_address,
+                    'tx_hash': blockchain_result.get('tx_hash'),
+                    'block_number': blockchain_result.get('block_number'),
+                    'gas_used': blockchain_result.get('gas_used'),
+                    'joined_on_blockchain': True
+                }
+            
+            return response
+            
+        except HTTPException:
+            db.rollback()
+            raise
+        except Exception as e:
+            db.rollback()
+            print(f"❌ Member addition failed with error: {str(e)}")
+            print(f"❌ Error type: {type(e)}")
+            import traceback
+            print(f"❌ Traceback: {traceback.format_exc()}")
+            raise HTTPException(status_code=500, detail=f"Failed to add member: {str(e)}")
     
     def get_group_members(self, group_id: UUID, db: Session = Depends(get_db)) -> List[GroupMemberResponse]:
         """Get all members of a group"""
@@ -426,7 +502,7 @@ class GroupRoutes:
         
         return [GroupResponse.model_validate(group) for group in groups]
     
-    # New Web3/Blockchain methods
+    # Web3/Blockchain methods
     async def sync_blockchain_groups(self, db: Session = Depends(get_db)) -> BlockchainSyncResponse:
         """Sync groups from blockchain to database"""
         try:
