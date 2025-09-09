@@ -33,8 +33,9 @@ class Web3Service:
    
         self.factory_address = os.getenv('FACTORY_CONTRACT_ADDRESS', '0xca0009AF8E28ccfeAA5bB314fD32856B3d278BF7')
         
-        # Load contract ABI
+        # Load contract ABI - no fallback, let it throw error if missing
         self.factory_abi = self._load_contract_abi()
+        self.group_abi = self._load_group_contract_abi()
         
         # Initialize contract instance
         self.factory_contract = self.w3.eth.contract(
@@ -79,95 +80,22 @@ class Web3Service:
             logger.warning(f"Contract connection test failed: {e}")
     
     def _load_contract_abi(self) -> List[Dict[str, Any]]:
-        """Load contract ABI from artifacts or return hardcoded ABI"""
+        """Load factory contract ABI from artifacts - throw error if missing"""
         abi_file_path = os.getenv('CONTRACT_ABI_PATH', './artifacts/contracts/ChamaFactory.sol/ChamaFactory.json')
         
-        try:
-            with open(abi_file_path, 'r') as f:
-                contract_artifact = json.load(f)
-                logger.info(f"Loaded ABI from {abi_file_path}")
-                return contract_artifact['abi']
-        except FileNotFoundError:
-            logger.warning(f"ABI file not found at {abi_file_path}, using fallback ABI")
-            return self._get_fallback_abi()
+        with open(abi_file_path, 'r') as f:
+            contract_artifact = json.load(f)
+            logger.info(f"Loaded Factory ABI from {abi_file_path}")
+            return contract_artifact['abi']
     
-    def _get_fallback_abi(self) -> List[Dict[str, Any]]:
-        """Fallback ABI with essential functions"""
-        return [
-            {
-                "inputs": [
-                    {
-                        "components": [
-                            {"name": "name", "type": "string"},
-                            {"name": "contributionAmount", "type": "uint256"},
-                            {"name": "maxMembers", "type": "uint256"},
-                            {"name": "startDate", "type": "uint256"},
-                            {"name": "endDate", "type": "uint256"},
-                            {"name": "contributionFrequency", "type": "string"},
-                            {"name": "punishmentMode", "type": "uint8"},
-                            {"name": "approvalRequired", "type": "bool"},
-                            {"name": "emergencyWithdrawAllowed", "type": "bool"},
-                            {"name": "creator", "type": "address"},
-                            {"name": "contributionToken", "type": "address"},
-                            {"name": "gracePeriod", "type": "uint256"},
-                            {"name": "contributionWindow", "type": "uint256"}
-                        ],
-                        "name": "config",
-                        "type": "tuple"
-                    }
-                ],
-                "name": "createGroup",
-                "outputs": [],
-                "stateMutability": "nonpayable",
-                "type": "function"
-            },
-            {
-                "inputs": [],
-                "name": "getAllGroups",
-                "outputs": [{"name": "", "type": "address[]"}],
-                "stateMutability": "view",
-                "type": "function"
-            },
-            {
-                "inputs": [{"name": "creator", "type": "address"}],
-                "name": "getCreatorGroups",
-                "outputs": [{"name": "", "type": "address[]"}],
-                "stateMutability": "view",
-                "type": "function"
-            },
-            {
-                "inputs": [],
-                "name": "groupCounter",
-                "outputs": [{"name": "", "type": "uint256"}],
-                "stateMutability": "view",
-                "type": "function"
-            },
-            {
-                "inputs": [{"name": "groupAddress", "type": "address"}],
-                "name": "getGroupInfo",
-                "outputs": [
-                    {"name": "name", "type": "string"},
-                    {"name": "creator", "type": "address"},
-                    {"name": "contributionAmount", "type": "uint256"},
-                    {"name": "maxMembers", "type": "uint256"},
-                    {"name": "currentMembers", "type": "uint256"}
-                ],
-                "stateMutability": "view",
-                "type": "function"
-            },
-            {
-                "anonymous": False,
-                "inputs": [
-                    {"indexed": True, "name": "creator", "type": "address"},
-                    {"indexed": True, "name": "groupAddress", "type": "address"},
-                    {"indexed": False, "name": "name", "type": "string"},
-                    {"indexed": False, "name": "contributionAmount", "type": "uint256"},
-                    {"indexed": False, "name": "maxMembers", "type": "uint256"}
-                ],
-                "name": "GroupCreated",
-                "type": "event"
-            }
-        ]
+    def _load_group_contract_abi(self) -> List[Dict[str, Any]]:
+        """Load group contract ABI from artifacts"""
+        abi_file_path = os.getenv('GROUP_ABI_PATH', './artifacts/contracts/ChamaGroup.sol/ChamaGroup.json')
+        
+        with open(abi_file_path, 'r') as f:
+            contract_artifact = json.load(f)
+            logger.info(f"Loaded Group ABI from {abi_file_path}")
+            return contract_artifact['abi']
 
     def _get_gas_price(self) -> int:
         """Get current gas price with fallback"""
@@ -189,6 +117,16 @@ class Web3Service:
         except Exception as e:
             logger.warning(f"Gas estimation failed: {e}, using default")
             return self.default_gas_limit
+
+    def _get_group_contract(self, group_address: str):
+        """Get group contract instance"""
+        if not self.validate_address(group_address):
+            raise ValueError("Invalid group address")
+        
+        return self.w3.eth.contract(
+            address=to_checksum_address(group_address),
+            abi=self.group_abi
+        )
 
     async def create_group_on_blockchain(self, group_data: GroupCreate, creator_address: str) -> Dict[str, Any]:
         """Create a group on the blockchain"""
@@ -259,6 +197,150 @@ class Web3Service:
             logger.error(f"Group creation failed: {e}")
             return {'success': False, 'error': str(e)}
 
+    async def join_group(self, group_address: str, user_address: str) -> Dict[str, Any]:
+        """Join a group on the blockchain"""
+        try:
+            if not self.validate_address(group_address):
+                return {'success': False, 'error': 'Invalid group address'}
+            
+            if not self.validate_address(user_address):
+                return {'success': False, 'error': 'Invalid user address'}
+            
+            # Get group contract instance
+            group_contract = self._get_group_contract(group_address)
+            
+            # Check if group exists and is active
+            try:
+                member_count = group_contract.functions.memberCount().call()
+                logger.info(f"Current member count: {member_count}")
+            except Exception as e:
+                return {'success': False, 'error': 'Group contract not found or invalid'}
+            
+            # Build transaction
+            nonce = self.w3.eth.get_transaction_count(self.account.address)
+            transaction = group_contract.functions.joinGroup().build_transaction({
+                'from': self.account.address,
+                'nonce': nonce,
+                'gasPrice': self._get_gas_price(),
+            })
+            
+            # Estimate gas
+            transaction['gas'] = self._estimate_gas(transaction)
+            
+            # Sign and send transaction
+            signed_txn = self.w3.eth.account.sign_transaction(transaction, private_key=self.private_key)
+            tx_hash = self.w3.eth.send_raw_transaction(signed_txn.rawTransaction)
+            
+            logger.info(f"Join group transaction sent: {tx_hash.hex()}")
+            
+            # Wait for transaction receipt with timeout
+            receipt = self.w3.eth.wait_for_transaction_receipt(tx_hash, timeout=300)
+            
+            # Check transaction status
+            if receipt.status == 0:
+                return {'success': False, 'error': 'Transaction failed'}
+            
+            return {
+                'success': True,
+                'tx_hash': tx_hash.hex(),
+                'block_number': receipt.blockNumber,
+                'gas_used': receipt.gasUsed,
+                'effective_gas_price': receipt.effectiveGasPrice if hasattr(receipt, 'effectiveGasPrice') else None
+            }
+            
+        except ContractLogicError as e:
+            logger.error(f"Contract logic error during join: {e}")
+            return {'success': False, 'error': f'Contract error: {str(e)}'}
+        except Exception as e:
+            logger.error(f"Join group failed: {e}")
+            return {'success': False, 'error': str(e)}
+
+    async def get_member_details(self, group_address: str, member_address: str) -> Dict[str, Any]:
+        """Get member details from group contract"""
+        try:
+            if not self.validate_address(group_address) or not self.validate_address(member_address):
+                return {'success': False, 'error': 'Invalid address'}
+            
+            group_contract = self._get_group_contract(group_address)
+            
+            # Call getMemberDetails function
+            member_details = group_contract.functions.getMemberDetails(
+                to_checksum_address(member_address)
+            ).call()
+            
+            return {
+                'success': True,
+                'exists': member_details[0],
+                'is_active': member_details[1],
+                'join_date': member_details[2],
+                'total_contributions': str(member_details[3]),
+                'missed_contributions': member_details[4],
+                'penalty_amount': str(member_details[5])
+            }
+            
+        except Exception as e:
+            logger.error(f"Error getting member details: {e}")
+            return {'success': False, 'error': str(e)}
+
+    async def contribute_to_group(self, group_address: str, contribution_amount: int) -> Dict[str, Any]:
+        """Make a contribution to a group"""
+        try:
+            if not self.validate_address(group_address):
+                return {'success': False, 'error': 'Invalid group address'}
+            
+            group_contract = self._get_group_contract(group_address)
+            
+            # Build transaction
+            nonce = self.w3.eth.get_transaction_count(self.account.address)
+            transaction = group_contract.functions.contribute().build_transaction({
+                'from': self.account.address,
+                'value': contribution_amount,
+                'nonce': nonce,
+                'gasPrice': self._get_gas_price(),
+            })
+            
+            # Estimate gas
+            transaction['gas'] = self._estimate_gas(transaction)
+            
+            # Sign and send transaction
+            signed_txn = self.w3.eth.account.sign_transaction(transaction, private_key=self.private_key)
+            tx_hash = self.w3.eth.send_raw_transaction(signed_txn.rawTransaction)
+            
+            logger.info(f"Contribution transaction sent: {tx_hash.hex()}")
+            
+            # Wait for transaction receipt
+            receipt = self.w3.eth.wait_for_transaction_receipt(tx_hash, timeout=300)
+            
+            if receipt.status == 0:
+                return {'success': False, 'error': 'Transaction failed'}
+            
+            return {
+                'success': True,
+                'tx_hash': tx_hash.hex(),
+                'block_number': receipt.blockNumber,
+                'gas_used': receipt.gasUsed
+            }
+            
+        except ContractLogicError as e:
+            logger.error(f"Contract logic error during contribution: {e}")
+            return {'success': False, 'error': f'Contract error: {str(e)}'}
+        except Exception as e:
+            logger.error(f"Contribution failed: {e}")
+            return {'success': False, 'error': str(e)}
+
+    async def get_group_member_count(self, group_address: str) -> int:
+        """Get current member count for a group"""
+        try:
+            if not self.validate_address(group_address):
+                return 0
+            
+            group_contract = self._get_group_contract(group_address)
+            return group_contract.functions.memberCount().call()
+            
+        except Exception as e:
+            logger.error(f"Error getting member count: {e}")
+            return 0
+
     def _parse_group_created_event(self, receipt) -> Optional[str]:
         """Parse GroupCreated event from transaction receipt"""
         try:
@@ -307,7 +389,7 @@ class Web3Service:
             
             group_address = to_checksum_address(group_address)
             
-            # Check if getGroupInfo function exists in ABI
+            # Try to get info from factory contract first
             try:
                 info = self.factory_contract.functions.getGroupInfo(group_address).call()
                 return {
@@ -318,11 +400,20 @@ class Web3Service:
                     'current_members': info[4]
                 }
             except Exception:
-                # Fallback: just return basic info
-                return {
-                    'address': group_address.lower(),
-                    'verified': True
-                }
+                # Try to get info directly from group contract
+                try:
+                    group_contract = self._get_group_contract(group_address)
+                    member_count = group_contract.functions.memberCount().call()
+                    return {
+                        'address': group_address.lower(),
+                        'current_members': member_count,
+                        'verified': True
+                    }
+                except Exception:
+                    return {
+                        'address': group_address.lower(),
+                        'verified': False
+                    }
         except Exception as e:
             logger.error(f"Error fetching group info for {group_address}: {e}")
             return None

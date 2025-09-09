@@ -98,6 +98,7 @@ class GroupWithDetails(GroupResponse):
 class GroupMemberBase(BaseSchema):
     group_id: UUID
     user_id: UUID
+    wallet_address: Optional[str] = Field(None, pattern="^0x[a-fA-F0-9]{40}$")
 
 class GroupMemberCreate(GroupMemberBase):
     pass

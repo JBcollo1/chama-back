@@ -298,7 +298,8 @@ class GroupRoutes:
             raise HTTPException(status_code=404, detail="User not found")
         
         # Check if wallet address is required and provided
-        wallet_address = getattr(member_data, 'wallet_address', None)
+        wallet_address = member_data.wallet_address
+
         if group.contract_address:  # This is a blockchain group
             if not wallet_address:
                 raise HTTPException(
@@ -337,7 +338,7 @@ class GroupRoutes:
                 print("🔗 Joining group on blockchain...")
                 
                 # Call blockchain join function
-                blockchain_result = await self.web3_service.join_group_on_blockchain(
+                blockchain_result = await self.web3_service.join_group(
                     group.contract_address, 
                     wallet_address
                 )
