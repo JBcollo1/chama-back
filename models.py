@@ -119,6 +119,7 @@ class Profile(Base):
     bio = Column(Text, nullable=True)
     avatar_url = Column(String, nullable=True)
     phone_number = Column(String, nullable=True)
+    wallet_address = Column(String, nullable = True)
     location = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
