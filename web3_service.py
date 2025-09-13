@@ -146,7 +146,7 @@ class Web3Service:
                 int(group_data.end_date.timestamp()) if group_data.end_date else now + 30 * 24 * 60 * 60,
                 getattr(group_data, 'contribution_frequency', 'weekly') or "weekly",
                 0,  # punishment mode
-                getattr(group_data, 'approval_required', True),
+                getattr(group_data, 'approval_required', False),
                 False,  # emergency withdraw allowed
                 to_checksum_address(creator_address),
                 '0x0000000000000000000000000000000000000000',  # native token

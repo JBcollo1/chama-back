@@ -179,6 +179,7 @@ class GroupMember(Base):
     joined_at = Column(DateTime, default=datetime.utcnow)
     left_at = Column(DateTime, nullable=True)
     
+    
     # Relationships
     group = relationship("Group", back_populates="members")
     user = relationship("Profile", back_populates="group_memberships")
