@@ -110,7 +110,10 @@ class AuthService:
         # Decode token to get JTI and expiration
         payload = self.verify_token(refresh_token)
         jti = payload.get("jti")
-        expires_at = datetime.fromtimestamp(payload.get("exp"))
+        exp_timestamp = payload.get("exp")
+        if exp_timestamp is None:
+            raise ValueError("Token missing expiration timestamp")
+        expires_at = datetime.fromtimestamp(exp_timestamp)
         
         # Revoke existing tokens for this user
         db.query(RefreshToken).filter(
