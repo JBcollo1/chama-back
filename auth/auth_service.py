@@ -85,7 +85,7 @@ class AuthService:
             # Get user info from Supabase using the token
             user_response = self.supabase.auth.get_user(supabase_token)
             
-            if not user_response.user:
+            if not user_response or not hasattr(user_response, 'user') or not user_response.user:
                 raise HTTPException(
                     status_code=status.HTTP_401_UNAUTHORIZED,
                     detail="Invalid Supabase token"
@@ -366,9 +366,6 @@ class AuthService:
                 print("Invalid credentials - user or session is None")
                 # Check if there's an error in the response
                 error_msg = "Invalid email or password"
-                if hasattr(auth_response, 'error') and auth_response.error:
-                    error_msg = f"Supabase error: {auth_response.error}"
-                    print(f"Supabase error details: {auth_response.error}")
                 
                 raise HTTPException(
                     status_code=status.HTTP_401_UNAUTHORIZED,
@@ -405,11 +402,11 @@ class AuthService:
             
             # Check for specific Supabase errors
             if hasattr(e, 'message'):
-                print(f"Error message: {e.message}")
+                print(f"Error message: {getattr(e, 'message', 'Unknown')}")
             if hasattr(e, 'details'):
-                print(f"Error details: {e.details}")
+                print(f"Error details: {getattr(e, 'details', 'Unknown')}")
             if hasattr(e, 'code'):
-                print(f"Error code: {e.code}")
+                print(f"Error code: {getattr(e, 'code', 'Unknown')}")
                 
             import traceback
             print(f"Traceback: {traceback.format_exc()}")
