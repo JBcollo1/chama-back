@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 from typing import Optional, Dict, Any
 from fastapi import HTTPException, Request, Response, status
 from fastapi.security import HTTPAuthorizationCredentials
-from supabase import create_client, Client
+from supabase._sync.client import create_client, SyncClient
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 from passlib.context import CryptContext
@@ -18,9 +18,13 @@ SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
 SECRET_KEY = os.getenv("SECRET_KEY", "your-secret-key-here")
 FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3000")
 
+# Ensure required Supabase environment variables are set
+if not SUPABASE_URL or not SUPABASE_ANON_KEY or not SUPABASE_SERVICE_ROLE_KEY:
+    raise RuntimeError("SUPABASE_URL, SUPABASE_ANON_KEY, and SUPABASE_SERVICE_ROLE_KEY must be set in environment variables.")
+
 # Initialize Supabase clients
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
-supabase_admin: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
+supabase: SyncClient = create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
+supabase_admin: SyncClient = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
 
 # Password hashing
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
