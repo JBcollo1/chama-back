@@ -8,6 +8,7 @@ __pycache__/
 venv/
 .env
 env
+.venv/
 
 # Configuration and secret files (DO NOT expose credentials)
 client_secrets.json
