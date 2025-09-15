@@ -1,10 +1,10 @@
 import os
 import uuid
 from datetime import datetime, timedelta
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, cast, Literal
 from fastapi import HTTPException, Request, Response, status
 from fastapi.security import HTTPAuthorizationCredentials
-from supabase import create_client, Client
+from supabase._sync.client import create_client, SyncClient
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 from passlib.context import CryptContext
@@ -18,12 +18,19 @@ SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
 SECRET_KEY = os.getenv("SECRET_KEY", "your-secret-key-here")
 FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3000")
 
+# Ensure required Supabase environment variables are set
+if not SUPABASE_URL or not SUPABASE_ANON_KEY or not SUPABASE_SERVICE_ROLE_KEY:
+    raise RuntimeError("SUPABASE_URL, SUPABASE_ANON_KEY, and SUPABASE_SERVICE_ROLE_KEY must be set in environment variables.")
+
 # Initialize Supabase clients
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
-supabase_admin: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
+supabase: SyncClient = create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
+supabase_admin: SyncClient = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
 
 # Password hashing
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+# OAuth provider types
+OAuthProvider = Literal['google', 'github']
 
 
 class AuthService:
@@ -81,7 +88,7 @@ class AuthService:
             # Get user info from Supabase using the token
             user_response = self.supabase.auth.get_user(supabase_token)
             
-            if not user_response.user:
+            if not user_response or not hasattr(user_response, 'user') or not user_response.user:
                 raise HTTPException(
                     status_code=status.HTTP_401_UNAUTHORIZED,
                     detail="Invalid Supabase token"
@@ -106,7 +113,10 @@ class AuthService:
         # Decode token to get JTI and expiration
         payload = self.verify_token(refresh_token)
         jti = payload.get("jti")
-        expires_at = datetime.fromtimestamp(payload.get("exp"))
+        exp_timestamp = payload.get("exp")
+        if exp_timestamp is None:
+            raise ValueError("Token missing expiration timestamp")
+        expires_at = datetime.fromtimestamp(exp_timestamp)
         
         # Revoke existing tokens for this user
         db.query(RefreshToken).filter(
@@ -149,7 +159,7 @@ class AuthService:
                 return False
             
             # Verify token hash
-            return self.pwd_context.verify(refresh_token, token_record.token_hash)
+            return self.pwd_context.verify(refresh_token, cast(str, token_record.token_hash))
             
         except Exception:
             return False
@@ -249,7 +259,6 @@ class AuthService:
                 profile.display_name = user_metadata["full_name"]
             elif user_metadata.get("name"):
                 profile.display_name = user_metadata["name"]
-            profile.updated_at = datetime.utcnow()
         else:
             # Create new profile
             display_name = user_metadata.get("full_name") or user_metadata.get("name")
@@ -266,7 +275,7 @@ class AuthService:
         return profile
     
     # Authentication operations
-    def register_user(self, email: str, password: str, display_name: Optional[str] = None, phone_number: Optional[str] = None, db: Session = None) -> Dict[str, Any]:
+    def register_user(self, email: str, password: str, display_name: Optional[str] = None, phone_number: Optional[str] = None, *, db: Session) -> Dict[str, Any]:
         """Register a new user with Supabase Auth and create profile"""
         try:
             # Create user in Supabase Auth
@@ -362,9 +371,6 @@ class AuthService:
                 print("Invalid credentials - user or session is None")
                 # Check if there's an error in the response
                 error_msg = "Invalid email or password"
-                if hasattr(auth_response, 'error') and auth_response.error:
-                    error_msg = f"Supabase error: {auth_response.error}"
-                    print(f"Supabase error details: {auth_response.error}")
                 
                 raise HTTPException(
                     status_code=status.HTTP_401_UNAUTHORIZED,
@@ -401,11 +407,11 @@ class AuthService:
             
             # Check for specific Supabase errors
             if hasattr(e, 'message'):
-                print(f"Error message: {e.message}")
+                print(f"Error message: {getattr(e, 'message', 'Unknown')}")
             if hasattr(e, 'details'):
-                print(f"Error details: {e.details}")
+                print(f"Error details: {getattr(e, 'details', 'Unknown')}")
             if hasattr(e, 'code'):
-                print(f"Error code: {e.code}")
+                print(f"Error code: {getattr(e, 'code', 'Unknown')}")
                 
             import traceback
             print(f"Traceback: {traceback.format_exc()}")
@@ -467,7 +473,8 @@ class AuthService:
         self,
         request: Request,
         credentials: Optional[HTTPAuthorizationCredentials] = None,
-        db: Session = None
+        *,
+        db: Session
     ) -> Dict[str, Any]:
         """Get current authenticated user using our own JWT tokens"""
         
@@ -481,11 +488,12 @@ class AuthService:
         self,
         request: Request,
         credentials: Optional[HTTPAuthorizationCredentials] = None,
-        db: Session = None
+        *,
+        db: Session
     ) -> Optional[Dict[str, Any]]:
         """Get current user if authenticated, otherwise None"""
         try:
-            return self.get_current_user(request, credentials, db)
+            return self.get_current_user(request, credentials, db=db)
         except HTTPException:
             return None
     def get_current_user_from_token(self, token: str, db: Session) -> Dict[str, Any]:
@@ -558,6 +566,14 @@ class AuthService:
     def generate_oauth_url(self, provider: str, request: Request) -> Dict[str, Any]:
         """Generate OAuth URL for the specified provider"""
         try:
+            # Validate provider is supported
+            supported_providers = ['google', 'github']
+            if provider not in supported_providers:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Unsupported OAuth provider: {provider}. Supported providers: {', '.join(supported_providers)}"
+                )
+            
             # Generate state parameter for security
             state = str(uuid.uuid4())
             
@@ -570,7 +586,7 @@ class AuthService:
             
             # Create OAuth URL with Supabase
             response = self.supabase.auth.sign_in_with_oauth({
-                "provider": provider,
+                "provider": cast(OAuthProvider, provider),
                 "options": {
                     "redirect_to": frontend_callback,  # Frontend URL, not API URL
                     "query_params": {
