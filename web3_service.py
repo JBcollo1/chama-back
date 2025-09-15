@@ -1,14 +1,14 @@
 import os
 import json
-import asyncio
 from datetime import datetime
-from decimal import Decimal
-from typing import List, Dict, Any, Optional, Tuple
+from typing import List, Dict, Any, Optional
 from web3 import Web3
-from web3.middleware import geth_poa_middleware
-from web3.exceptions import ContractLogicError, TransactionNotFound, BlockNotFound
+from web3.middleware.geth_poa import geth_poa_middleware
+from web3.exceptions import ContractLogicError, TransactionNotFound
+from web3.types import TxParams, Wei
+from hexbytes import HexBytes
 from eth_account import Account
-from eth_utils import is_address, to_checksum_address
+from eth_utils.address import is_address, to_checksum_address
 import logging
 
 from schemas import GroupCreate
@@ -39,7 +39,7 @@ class Web3Service:
         
         # Initialize contract instance
         self.factory_contract = self.w3.eth.contract(
-            address=self.factory_address,
+            address=to_checksum_address(self.factory_address),
             abi=self.factory_abi
         )
         
@@ -156,11 +156,12 @@ class Web3Service:
             
             # Build transaction
             nonce = self.w3.eth.get_transaction_count(self.account.address)
-            transaction = self.factory_contract.functions.createGroup(config).build_transaction({
+            tx_params: TxParams = {
                 'from': self.account.address,
                 'nonce': nonce,
-                'gasPrice': self._get_gas_price(),
-            })
+                'gasPrice': Wei(self._get_gas_price()),
+            }
+            transaction = self.factory_contract.functions.createGroup(config).build_transaction(tx_params)
             
             # Estimate gas
             transaction['gas'] = self._estimate_gas(transaction)
@@ -175,7 +176,7 @@ class Web3Service:
             receipt = self.w3.eth.wait_for_transaction_receipt(tx_hash, timeout=300)
             
             # Check transaction status
-            if receipt.status == 0:
+            if receipt['status'] == 0:
                 return {'success': False, 'error': 'Transaction failed'}
             
             # Parse events to get group address
@@ -184,10 +185,10 @@ class Web3Service:
             return {
                 'success': True,
                 'tx_hash': tx_hash.hex(),
-                'block_number': receipt.blockNumber,
+                'block_number': receipt['blockNumber'],
                 'group_address': group_address,
-                'gas_used': receipt.gasUsed,
-                'effective_gas_price': receipt.effectiveGasPrice if hasattr(receipt, 'effectiveGasPrice') else None
+                'gas_used': receipt['gasUsed'],
+                'effective_gas_price': receipt.get('effectiveGasPrice')
             }
             
         except ContractLogicError as e:
@@ -217,12 +218,13 @@ class Web3Service:
                 return {'success': False, 'error': 'Group contract not found or invalid'}
             
             # Build transaction
-            nonce = self.w3.eth.get_transaction_count(user_address)
-            transaction = group_contract.functions.joinGroup().build_transaction({
-                'from': user_address,
+            nonce = self.w3.eth.get_transaction_count(self.account.address)
+            tx_params: TxParams = {
+                'from': self.account.address,
                 'nonce': nonce,
-                'gasPrice': self._get_gas_price(),
-            })
+                'gasPrice': Wei(self._get_gas_price()),
+            }
+            transaction = group_contract.functions.joinGroup().build_transaction(tx_params)
             
             # Estimate gas
             transaction['gas'] = self._estimate_gas(transaction)
@@ -252,8 +254,8 @@ class Web3Service:
             #  transaction receipt
             receipt = self.w3.eth.wait_for_transaction_receipt(tx_hash, timeout=300)
             
-            
-            if receipt.status == 0:
+            # Check transaction status
+            if receipt['status'] == 0:
                 return {'success': False, 'error': 'Transaction failed'}
                 
         
@@ -269,10 +271,10 @@ class Web3Service:
                 
             return {
                 'success': True,
-                'tx_hash': tx_hash,
-                'block_number': receipt.blockNumber,
-                'gas_used': receipt.gasUsed,
-                'effective_gas_price': receipt.effectiveGasPrice if hasattr(receipt, 'effectiveGasPrice') else None
+                'tx_hash': tx_hash.hex(),
+                'block_number': receipt['blockNumber'],
+                'gas_used': receipt['gasUsed'],
+                'effective_gas_price': receipt.get('effectiveGasPrice')
             }
             
         except Exception as e:
@@ -315,12 +317,13 @@ class Web3Service:
             
             # Build transaction
             nonce = self.w3.eth.get_transaction_count(self.account.address)
-            transaction = group_contract.functions.contribute().build_transaction({
+            tx_params: TxParams = {
                 'from': self.account.address,
-                'value': contribution_amount,
+                'value': Wei(contribution_amount),
                 'nonce': nonce,
-                'gasPrice': self._get_gas_price(),
-            })
+                'gasPrice': Wei(self._get_gas_price()),
+            }
+            transaction = group_contract.functions.contribute().build_transaction(tx_params)
             
             # Estimate gas
             transaction['gas'] = self._estimate_gas(transaction)
@@ -334,14 +337,14 @@ class Web3Service:
             # Wait for transaction receipt
             receipt = self.w3.eth.wait_for_transaction_receipt(tx_hash, timeout=300)
             
-            if receipt.status == 0:
+            if receipt['status'] == 0:
                 return {'success': False, 'error': 'Transaction failed'}
             
             return {
                 'success': True,
                 'tx_hash': tx_hash.hex(),
-                'block_number': receipt.blockNumber,
-                'gas_used': receipt.gasUsed
+                'block_number': receipt['blockNumber'],
+                'gas_used': receipt['gasUsed']
             }
             
         except ContractLogicError as e:
@@ -456,17 +459,20 @@ class Web3Service:
             if not tx_hash.startswith('0x'):
                 tx_hash = '0x' + tx_hash
             
-            receipt = self.w3.eth.get_transaction_receipt(tx_hash)
-            transaction = self.w3.eth.get_transaction(tx_hash)
+            # Convert to HexBytes for proper type handling
+            hash_bytes = HexBytes(tx_hash)
+            
+            receipt = self.w3.eth.get_transaction_receipt(hash_bytes)
+            transaction = self.w3.eth.get_transaction(hash_bytes)
             
             return {
                 'hash': tx_hash,
-                'status': 'success' if receipt.status == 1 else 'failed',
-                'block_number': receipt.blockNumber,
-                'gas_used': receipt.gasUsed,
-                'from': transaction['from'].lower(),
-                'to': transaction['to'].lower() if transaction['to'] else None,
-                'value': str(transaction['value'])
+                'status': 'success' if receipt['status'] == 1 else 'failed',
+                'block_number': receipt['blockNumber'],
+                'gas_used': receipt['gasUsed'],
+                'from': transaction.get('from', '').lower(),
+                'to': transaction.get('to', '').lower() if transaction.get('to') else None,
+                'value': str(transaction.get('value', 0))
             }
         except TransactionNotFound:
             return {'hash': tx_hash, 'status': 'pending'}
@@ -530,7 +536,8 @@ class Web3Service:
             if not self.validate_address(target_address):
                 return {'error': 'Invalid address'}
             
-            balance_wei = self.w3.eth.get_balance(target_address)
+            checksum_address = to_checksum_address(target_address)
+            balance_wei = self.w3.eth.get_balance(checksum_address)
             balance_eth = self.w3.from_wei(balance_wei, 'ether')
             
             return {
