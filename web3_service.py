@@ -217,9 +217,9 @@ class Web3Service:
                 return {'success': False, 'error': 'Group contract not found or invalid'}
             
             # Build transaction
-            nonce = self.w3.eth.get_transaction_count(self.account.address)
+            nonce = self.w3.eth.get_transaction_count(user_address)
             transaction = group_contract.functions.joinGroup().build_transaction({
-                'from': self.account.address,
+                'from': user_address,
                 'nonce': nonce,
                 'gasPrice': self._get_gas_price(),
             })
@@ -228,33 +228,56 @@ class Web3Service:
             transaction['gas'] = self._estimate_gas(transaction)
             
             # Sign and send transaction
-            signed_txn = self.w3.eth.account.sign_transaction(transaction, private_key=self.private_key)
-            tx_hash = self.w3.eth.send_raw_transaction(signed_txn.rawTransaction)
-            
-            logger.info(f"Join group transaction sent: {tx_hash.hex()}")
-            
-            # Wait for transaction receipt with timeout
+            return {
+                    'success': True,
+                    'transaction': {
+                        'to': group_address,
+                        'from': user_address,
+                        'data': transaction['data'],
+                        'gas': hex(transaction['gas']),
+                        'gasPrice': hex(transaction['gasPrice']),
+                        'nonce': hex(nonce),
+                        'value': '0x0'
+                    },
+                    'message': 'Transaction prepared. Please sign with your wallet.'
+                }
+                 
+        except Exception as e:
+            logger.error(f"Join group preparation failed: {e}")
+            return {'success': False, 'error': str(e)}
+
+    async def verify_join_transaction(self, tx_hash: str, group_address: str, user_address: str) -> Dict[str, Any]:
+        """Verify that a join transaction was successful"""
+        try:
+            #  transaction receipt
             receipt = self.w3.eth.wait_for_transaction_receipt(tx_hash, timeout=300)
             
-            # Check transaction status
+            
             if receipt.status == 0:
                 return {'success': False, 'error': 'Transaction failed'}
+                
+        
+            if receipt.to.lower() != group_address.lower():
+                return {'success': False, 'error': 'Transaction was not sent to the correct contract'}
+                
             
+            group_contract = self._get_group_contract(group_address)
+            is_member = group_contract.functions.isMember(user_address).call()
+            
+            if not is_member:
+                return {'success': False, 'error': 'User is not registered as a member after transaction'}
+                
             return {
                 'success': True,
-                'tx_hash': tx_hash.hex(),
+                'tx_hash': tx_hash,
                 'block_number': receipt.blockNumber,
                 'gas_used': receipt.gasUsed,
                 'effective_gas_price': receipt.effectiveGasPrice if hasattr(receipt, 'effectiveGasPrice') else None
             }
             
-        except ContractLogicError as e:
-            logger.error(f"Contract logic error during join: {e}")
-            return {'success': False, 'error': f'Contract error: {str(e)}'}
         except Exception as e:
-            logger.error(f"Join group failed: {e}")
+            logger.error(f"Transaction verification failed: {e}")
             return {'success': False, 'error': str(e)}
-
     async def get_member_details(self, group_address: str, member_address: str) -> Dict[str, Any]:
         """Get member details from group contract"""
         try:

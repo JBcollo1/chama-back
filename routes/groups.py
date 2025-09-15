@@ -299,7 +299,11 @@ class GroupRoutes:
         
         # Check if wallet address is required and provided
         wallet_address = member_data.wallet_address
-
+        if wallet_address:
+            user.wallet_address = wallet_address
+            db.add(user)
+            db.commit()
+            db.refresh(user)
         if group.contract_address:  # This is a blockchain group
             if not wallet_address:
                 raise HTTPException(
@@ -350,46 +354,31 @@ class GroupRoutes:
                         detail=f"Blockchain group join failed: {blockchain_result['error']}"
                     )
                 
-                print(f"✅ Successfully joined group on blockchain: {blockchain_result}")
+                print(f" Transaction prepared for user signing")
+
+                return {
+                "requires_signature": True,
+                "transaction": blockchain_result['transaction'],
+                "message": "Please sign the transaction with your wallet to complete joining the group.",
+                "group_id": str(group_id),
+                "user_id": str(member_data.user_id)
+                  }
             
-            # Create member in database
-            member_dict = member_data.model_dump()
-            
-            # Remove wallet_address from dict if it exists (assuming it's not in the database model)
-            member_dict.pop('wallet_address', None)
-            
-            # Set appropriate status based on group settings
-            if group.contract_address:
-                # For blockchain groups, member is active immediately after successful blockchain join
-                status = MemberStatus.active
             else:
-                # For non-blockchain groups, use pending status
-                status = MemberStatus.pending
-            
-            db_member = GroupMember(
-                group_id=group_id,
-                user_id=member_data.user_id,
-                status=status
-            )
-            
-            db.add(db_member)
-            db.commit()
-            db.refresh(db_member)
-            
-            print(f"✅ Database member created with ID: {db_member.id}")
-            
-            # Create response with blockchain info if applicable
-            response = GroupMemberResponse.model_validate(db_member)
-            if group.contract_address and wallet_address:
-                response.blockchain_info = {
-                    'wallet_address': wallet_address,
-                    'tx_hash': blockchain_result.get('tx_hash'),
-                    'block_number': blockchain_result.get('block_number'),
-                    'gas_used': blockchain_result.get('gas_used'),
-                    'joined_on_blockchain': True
-                }
-            
-            return response
+            # Create member in database
+                db_member = GroupMember(
+                    group_id=group_id,
+                    user_id=member_data.user_id,
+                    status=MemberStatus.pending  # or active based on your logic
+                )
+                
+                db.add(db_member)
+                db.commit()
+                db.refresh(db_member)
+                
+                print(f"✅ Database member created with ID: {db_member.id}")
+                
+                return GroupMemberResponse.model_validate(db_member)
             
         except HTTPException:
             db.rollback()
@@ -401,7 +390,79 @@ class GroupRoutes:
             import traceback
             print(f"❌ Traceback: {traceback.format_exc()}")
             raise HTTPException(status_code=500, detail=f"Failed to add member: {str(e)}")
-    
+
+    async def confirm_member_join(self, group_id: UUID, user_id: UUID, tx_hash: str, db: Session = Depends(get_db)) -> GroupMemberResponse:
+        """Confirm member join after successful blockchain transaction"""
+        # Verify group exists
+        group = db.query(Group).filter(Group.id == group_id).first()
+        if not group:
+            raise HTTPException(status_code=404, detail="Group not found")
+        
+       
+        user = db.query(Profile).filter(Profile.user_id == user_id).first()
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+        
+        
+        wallet_address = getattr(user, 'wallet_address', None)
+        if not wallet_address:
+            raise HTTPException(status_code=400, detail="User wallet address not found")
+        
+        try:
+            
+            verification_result = await self.web3_service.verify_join_transaction(
+                tx_hash, 
+                group.contract_address, 
+                wallet_address
+            )
+            
+            if not verification_result['success']:
+                raise HTTPException(
+                    status_code=400, 
+                    detail=f"Transaction verification failed: {verification_result['error']}"
+                )
+            
+            
+            existing_member = db.query(GroupMember).filter(
+                GroupMember.group_id == group_id,
+                GroupMember.user_id == user_id
+            ).first()
+            
+            if existing_member:
+                
+                existing_member.status = MemberStatus.active
+                db_member = existing_member
+            else:
+                
+                db_member = GroupMember(
+                    group_id=group_id,
+                    user_id=user_id,
+                    status=MemberStatus.active
+                )
+                db.add(db_member)
+            
+            db.commit()
+            db.refresh(db_member)
+            
+            
+            response = GroupMemberResponse.model_validate(db_member)
+            response.blockchain_info = {
+                'wallet_address': wallet_address,
+                'tx_hash': verification_result['tx_hash'],
+                'block_number': verification_result['block_number'],
+                'gas_used': verification_result['gas_used'],
+                'joined_on_blockchain': True
+            }
+            
+            return response
+            
+        except HTTPException:
+            db.rollback()
+            raise
+        except Exception as e:
+            db.rollback()
+            print(f" Member confirmation failed: {str(e)}")
+            raise HTTPException(status_code=500, detail=f"Failed to confirm member join: {str(e)}")
     def get_group_members(self, group_id: UUID, db: Session = Depends(get_db)) -> List[GroupMemberResponse]:
         """Get all members of a group"""
         members = db.query(GroupMember).filter(GroupMember.group_id == group_id).all()
