@@ -375,7 +375,8 @@ class AuthRoutes:
     ) -> OAuthTokenResponse:
         """Get stored OAuth provider token for API calls"""
         # Uses our own JWT tokens to authenticate
-        user_data = self.auth_service.get_current_user(request, credentials, db)
+        token = self.auth_service.get_token_from_cookie_or_header(request, credentials)
+        user_data = self.auth_service.get_current_user_from_token(token, db)
         user_id = user_data["user_id"]
         
         token_data = self.auth_service.get_oauth_token(user_id, provider, db)
@@ -393,7 +394,7 @@ class AuthRoutes:
             expires_at=token_data["expires_at"].isoformat() if token_data["expires_at"] else None,
             is_expired=token_data["is_expired"]
         )
-
+    
     def revoke_oauth_token(
         self,
         provider: str,
@@ -403,7 +404,8 @@ class AuthRoutes:
     ):
         """Remove OAuth provider token"""
         # Uses our own JWT tokens to authenticate
-        user_data = self.auth_service.get_current_user(request, credentials, db)
+        token = self.auth_service.get_token_from_cookie_or_header(request, credentials)
+        user_data = self.auth_service.get_current_user_from_token(token, db)
         user_id = user_data["user_id"]
         
         self.auth_service.revoke_oauth_token(user_id, provider, db)
@@ -422,7 +424,8 @@ def get_current_user(
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(HTTPBearer(auto_error=False))
 ) -> Dict[str, Any]:
     """Dependency function to get current authenticated user using our own JWT tokens"""
-    return auth_service.get_current_user(request, credentials, db)
+    token = auth_service.get_token_from_cookie_or_header(request, credentials)
+    return auth_service.get_current_user_from_token(token, db)
 
 def get_current_user_optional(
     request: Request,
@@ -430,4 +433,10 @@ def get_current_user_optional(
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(HTTPBearer(auto_error=False))
 ) -> Optional[Dict[str, Any]]:
     """Dependency function to get current user if authenticated, otherwise None"""
-    return auth_service.get_current_user_optional(request, credentials, db)
+    try:
+        token = auth_service.get_token_from_cookie_or_header(request, credentials)
+        if token:
+            return auth_service.get_current_user_from_token(token, db)
+        return None
+    except:
+        return None
