@@ -1,9 +1,10 @@
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, field_validator
 from typing import Optional, List
 from datetime import datetime
 from uuid import UUID
 from decimal import Decimal
 from models import ContributionStatus, GroupStatus, MemberStatus, NotificationType
+from web3 import Web3
 
 # Base schemas
 class BaseSchema(BaseModel):
@@ -100,8 +101,17 @@ class GroupMemberBase(BaseSchema):
     user_id: UUID
     # wallet_address: Optional[str] = Field(None, pattern="^0x[a-fA-F0-9]{40}$")
 
-class GroupMemberCreate(GroupMemberBase):
-    pass
+class GroupMemberCreate(BaseSchema):
+    group_id: UUID
+    user_id: UUID
+    wallet_address: Optional[str] = Field(None, pattern="^0x[a-fA-F0-9]{40}$")
+
+    @field_validator("wallet_address")
+    def checksum_address(cls, v):
+        try:
+            return Web3.to_checksum_address(v)
+        except Exception:
+            raise ValueError("Invalid Ethereum address")
 
 class GroupMemberUpdate(BaseSchema):
     status: Optional[MemberStatus] = None
