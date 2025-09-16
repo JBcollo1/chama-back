@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import func, desc, asc
-from typing import List, Optional
+from typing import List, Optional, Union
 from uuid import UUID
 import asyncio
 from datetime import datetime
@@ -11,7 +11,7 @@ from models import Group, GroupMember, GroupAdmin, Profile, MemberStatus, GroupS
 from schemas import (
     GroupCreate, GroupUpdate, GroupResponse, GroupWithDetails,
     GroupMemberCreate, GroupMemberUpdate, GroupMemberResponse,
-    GroupAdminCreate, GroupAdminResponse, BlockchainSyncResponse
+    GroupAdminCreate, GroupAdminResponse, BlockchainSyncResponse, TransactionResponse,GroupMemberConfirmationResponse
 )
 from web3_service import Web3Service
 
@@ -31,7 +31,9 @@ class GroupRoutes:
         self.router.add_api_route("/{group_id}", self.delete_group, methods=["DELETE"])
         
         # Member management
-        self.router.add_api_route("/{group_id}/members", self.add_member, methods=["POST"], response_model=GroupMemberResponse)
+        self.router.add_api_route("/{group_id}/members", self.add_member, methods=["POST"], response_model=Union[GroupMemberResponse, TransactionResponse])
+        self.router.add_api_route("/{group_id}/members/confirm", self.confirm_member_join, methods=["POST"], response_model=GroupMemberConfirmationResponse)
+
         self.router.add_api_route("/{group_id}/members", self.get_group_members, methods=["GET"], response_model=List[GroupMemberResponse])
         self.router.add_api_route("/{group_id}/members/{member_id}", self.update_member, methods=["PUT"], response_model=GroupMemberResponse)
         self.router.add_api_route("/{group_id}/members/{member_id}", self.remove_member, methods=["DELETE"])
@@ -285,7 +287,7 @@ class GroupRoutes:
         return {"message": "Group marked as inactive (blockchain groups cannot be deleted)"}
     
     # Updated add_member method with wallet requirement
-    async def add_member(self, group_id: UUID, member_data: GroupMemberCreate, db: Session = Depends(get_db)) -> GroupMemberResponse:
+    async def add_member(self, group_id: UUID, member_data: GroupMemberCreate, db: Session = Depends(get_db)) -> Union[GroupMemberResponse,TransactionResponse]:
         """Add a member to a group - requires wallet address for blockchain groups"""
         # Verify group exists
         group = db.query(Group).filter(Group.id == group_id).first()
@@ -391,7 +393,7 @@ class GroupRoutes:
             print(f"❌ Traceback: {traceback.format_exc()}")
             raise HTTPException(status_code=500, detail=f"Failed to add member: {str(e)}")
 
-    async def confirm_member_join(self, group_id: UUID, user_id: UUID, tx_hash: str, db: Session = Depends(get_db)) -> GroupMemberResponse:
+    async def confirm_member_join(self, group_id: UUID, user_id: UUID, tx_hash: str, db: Session = Depends(get_db)) -> GroupMemberConfirmationResponse:
         """Confirm member join after successful blockchain transaction"""
         # Verify group exists
         group = db.query(Group).filter(Group.id == group_id).first()

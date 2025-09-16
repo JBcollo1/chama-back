@@ -68,6 +68,13 @@ class BlockchainInfo(BaseModel):
     block_number: Optional[int] = None
     gas_used: Optional[int] = None
     verified: Optional[bool] = None
+class TransactionResponse(BaseModel):
+    requires_signature: bool
+    transaction: dict
+    message: str
+    group_id: UUID
+    user_id: UUID
+
 
 class GroupResponse(GroupBase):
     id: UUID
@@ -121,6 +128,15 @@ class GroupMemberResponse(GroupMemberBase):
     status: MemberStatus
     joined_at: datetime
     left_at: Optional[datetime] = None
+class BlockchainInfo(BaseModel):
+    wallet_address: str
+    tx_hash: str
+    block_number: int
+    gas_used: int
+    joined_on_blockchain: bool
+
+class GroupMemberConfirmationResponse(GroupMemberResponse):
+    blockchain_info: BlockchainInfo
 
 # Group Admin schemas
 class GroupAdminBase(BaseSchema):
