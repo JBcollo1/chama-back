@@ -118,9 +118,9 @@ class ContributionRoutes:
         
         # Auto-update status based on payment
         if update_data.get('paid_date'):
-            db_contribution.status = ContributionStatus.completed
-        elif update_data.get('due_date') and update_data['due_date'] < datetime.utcnow() and not db_contribution.paid_date:
-            db_contribution.status = ContributionStatus.overdue
+            setattr(db_contribution, 'status', ContributionStatus.completed)
+        elif update_data.get('due_date') and update_data['due_date'] < datetime.utcnow() and db_contribution.paid_date is None:
+            setattr(db_contribution, 'status', ContributionStatus.overdue)
         
         db.commit()
         db.refresh(db_contribution)
@@ -144,14 +144,19 @@ class ContributionRoutes:
         if not db_contribution:
             raise HTTPException(status_code=404, detail="Contribution not found")
         
-        if db_contribution.status == ContributionStatus.completed:
+        # Check if already paid by querying the current status value
+        current_contribution = db.query(Contribution).filter(
+            Contribution.id == contribution_id,
+            Contribution.status == ContributionStatus.completed
+        ).first()
+        if current_contribution:
             raise HTTPException(status_code=400, detail="Contribution is already paid")
         
         # Update contribution
-        db_contribution.paid_date = datetime.utcnow()
-        db_contribution.status = ContributionStatus.completed
+        setattr(db_contribution, 'paid_date', datetime.utcnow())
+        setattr(db_contribution, 'status', ContributionStatus.completed)
         if transaction_hash:
-            db_contribution.transaction_hash = transaction_hash
+            setattr(db_contribution, 'transaction_hash', transaction_hash)
         
         db.commit()
         db.refresh(db_contribution)
