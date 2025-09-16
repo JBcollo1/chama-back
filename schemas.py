@@ -34,20 +34,15 @@ class ProfileResponse(ProfileBase):
 class GroupBase(BaseSchema):
     name: str
     description: Optional[str] = None
-    contribution_amount: float = Field(gt=0)
-    contribution_frequency: str = "monthly"
+    contribution_amount: Decimal = Field(gt=0)
+    contribution_frequency: Optional[str] = "monthly"
     max_members: int = Field(default=20, gt=0)
-    start_date: datetime
+    start_date: Optional[datetime] = None
     end_date: Optional[datetime] = None
 
 class GroupCreate(GroupBase):
     name: str = Field(..., min_length=1, max_length=255)
-    description: Optional[str] = None
-    contribution_amount: Decimal = Field(..., gt=0)
-    max_members: int = Field(..., ge=3, le=100)
-    start_date: Optional[datetime] = None
-    end_date: Optional[datetime] = None
-    contribution_frequency: Optional[str] = "weekly"
+    max_members: int = Field(default=20, ge=3, le=100)
     approval_required: Optional[bool] = True
     wallet_address: Optional[str] = Field(None, pattern="^0x[a-fA-F0-9]{40}$")
     network_info: Optional[dict] = None
@@ -55,7 +50,7 @@ class GroupCreate(GroupBase):
 class GroupUpdate(BaseSchema):
     name: Optional[str] = None
     description: Optional[str] = None
-    contribution_amount: Optional[float] = Field(None, gt=0)
+    contribution_amount: Optional[Decimal] = Field(None, gt=0)
     contribution_frequency: Optional[str] = None
     max_members: Optional[int] = Field(None, gt=0)
     start_date: Optional[datetime] = None
@@ -78,14 +73,7 @@ class TransactionResponse(BaseModel):
 
 class GroupResponse(GroupBase):
     id: UUID
-    name: str
-    description: Optional[str] = None
-    contribution_amount: Decimal
-    max_members: int
     member_count: Optional[int] = 0
-    start_date: Optional[datetime] = None
-    end_date: Optional[datetime] = None
-    contribution_frequency: Optional[str] = None
     status: str
     created_by: UUID
     created_at: datetime
@@ -155,7 +143,7 @@ class GroupAdminResponse(GroupAdminBase):
 class ContributionBase(BaseSchema):
     group_id: UUID
     member_id: UUID
-    amount: float = Field(gt=0)
+    amount: Decimal = Field(gt=0)
     due_date: datetime
     notes: Optional[str] = None
 
@@ -163,7 +151,7 @@ class ContributionCreate(ContributionBase):
     pass
 
 class ContributionUpdate(BaseSchema):
-    amount: Optional[float] = Field(None, gt=0)
+    amount: Optional[Decimal] = Field(None, gt=0)
     due_date: Optional[datetime] = None
     paid_date: Optional[datetime] = None
     status: Optional[ContributionStatus] = None
