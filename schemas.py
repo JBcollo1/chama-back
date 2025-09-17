@@ -116,7 +116,8 @@ class GroupMemberResponse(GroupMemberBase):
     status: MemberStatus
     joined_at: datetime
     left_at: Optional[datetime] = None
-class BlockchainInfo(BaseModel):
+
+class GroupMemberBlockchainInfo(BaseModel):
     wallet_address: str
     tx_hash: str
     block_number: int
@@ -124,7 +125,7 @@ class BlockchainInfo(BaseModel):
     joined_on_blockchain: bool
 
 class GroupMemberConfirmationResponse(GroupMemberResponse):
-    blockchain_info: BlockchainInfo
+    blockchain_info: GroupMemberBlockchainInfo
 
 # Group Admin schemas
 class GroupAdminBase(BaseSchema):
