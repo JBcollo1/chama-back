@@ -235,9 +235,9 @@ class Web3Service:
                     'transaction': {
                         'to': group_address,
                         'from': user_address,
-                        'data': transaction['data'],
+                        'data': transaction.get('data', ''),
                         'gas': hex(transaction['gas']),
-                        'gasPrice': hex(transaction['gasPrice']),
+                        'gasPrice': hex(transaction.get('gasPrice', 0)),
                         'nonce': hex(nonce),
                         'value': '0x0'
                     },
@@ -251,15 +251,20 @@ class Web3Service:
     async def verify_join_transaction(self, tx_hash: str, group_address: str, user_address: str) -> Dict[str, Any]:
         """Verify that a join transaction was successful"""
         try:
-            #  transaction receipt
-            receipt = self.w3.eth.wait_for_transaction_receipt(tx_hash, timeout=300)
+            # Convert string to HexBytes for proper type handling
+            if not tx_hash.startswith('0x'):
+                tx_hash = '0x' + tx_hash
+            hash_bytes = HexBytes(tx_hash)
+            
+            # Get transaction receipt
+            receipt = self.w3.eth.wait_for_transaction_receipt(hash_bytes, timeout=300)
             
             # Check transaction status
             if receipt['status'] == 0:
                 return {'success': False, 'error': 'Transaction failed'}
                 
-        
-            if receipt.to.lower() != group_address.lower():
+            # Verify transaction was sent to correct contract
+            if receipt.get('to', '').lower() != group_address.lower():
                 return {'success': False, 'error': 'Transaction was not sent to the correct contract'}
                 
             
@@ -271,7 +276,7 @@ class Web3Service:
                 
             return {
                 'success': True,
-                'tx_hash': tx_hash.hex(),
+                'tx_hash': tx_hash,
                 'block_number': receipt['blockNumber'],
                 'gas_used': receipt['gasUsed'],
                 'effective_gas_price': receipt.get('effectiveGasPrice')
