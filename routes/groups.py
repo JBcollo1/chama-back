@@ -11,7 +11,8 @@ from models import Group, GroupMember, GroupAdmin, Profile, MemberStatus, GroupS
 from schemas import (
     GroupCreate, GroupUpdate, GroupResponse, GroupWithDetails,
     GroupMemberCreate, GroupMemberUpdate, GroupMemberResponse,
-    GroupAdminCreate, GroupAdminResponse, BlockchainSyncResponse, TransactionResponse,GroupMemberConfirmationResponse
+    GroupAdminCreate, GroupAdminResponse, BlockchainSyncResponse, TransactionResponse,
+    GroupMemberConfirmationResponse, BlockchainInfo, GroupMemberBlockchainInfo
 )
 from web3_service import Web3Service
 
@@ -118,8 +119,9 @@ class GroupRoutes:
             print(f"✅ Database group created with ID: {db_group.id}")
             
             # Add creator as admin
+            group_uuid = getattr(db_group, 'id')
             admin_data = GroupAdminCreate(
-                group_id=db_group.id,
+                group_id=group_uuid,
                 user_id=group_data.created_by
             )
             db_admin = GroupAdmin(**admin_data.model_dump())
@@ -127,8 +129,9 @@ class GroupRoutes:
             
             # Add creator as member
             member_data = GroupMemberCreate(
-                group_id=db_group.id,
-                user_id=group_data.created_by
+                group_id=group_uuid,
+                user_id=group_data.created_by,
+                wallet_address=creator_address
             )
             db_member = GroupMember(**member_data.model_dump(), status=MemberStatus.active)
             db.add(db_member)
@@ -139,13 +142,13 @@ class GroupRoutes:
             
             # Create response with blockchain info
             response = GroupResponse.model_validate(db_group)
-            response.blockchain_info = {
-                'contract_address': blockchain_result['group_address'],
-                'tx_hash': blockchain_result['tx_hash'],
-                'block_number': blockchain_result['block_number'],
-                'gas_used': blockchain_result['gas_used'],
-                'verified': True
-            }
+            response.blockchain_info = BlockchainInfo(
+                contract_address=blockchain_result['group_address'],
+                tx_hash=blockchain_result['tx_hash'],
+                block_number=blockchain_result['block_number'],
+                gas_used=blockchain_result['gas_used'],
+                verified=True
+            )
             
             print(f"🎉 Group creation completed successfully: {response.id}")
             return response
@@ -206,17 +209,18 @@ class GroupRoutes:
             group_data.member_count = member_count
             
             # Add blockchain verification if requested
-            if include_blockchain and group.contract_address:
+            if include_blockchain and group.contract_address is not None:
                 try:
                     # Verify group still exists on blockchain
                     blockchain_groups = asyncio.run(self.web3_service.get_blockchain_groups())
-                    group_data.blockchain_verified = group.contract_address in blockchain_groups
-                    group_data.blockchain_info = {
-                        'contract_address': group.contract_address,
-                        'tx_hash': group.creation_tx_hash,
-                        'block_number': group.creation_block_number,
-                        'verified': group_data.blockchain_verified
-                    }
+                    contract_addr = getattr(group, 'contract_address', None)
+                    group_data.blockchain_verified = contract_addr in blockchain_groups if contract_addr else False
+                    group_data.blockchain_info = BlockchainInfo(
+                        contract_address=getattr(group, 'contract_address', None),
+                        tx_hash=getattr(group, 'creation_tx_hash', None),
+                        block_number=getattr(group, 'creation_block_number', None),
+                        verified=group_data.blockchain_verified
+                    )
                 except Exception as e:
                     print(f"Blockchain verification error: {e}")
                     group_data.blockchain_verified = False
@@ -238,16 +242,17 @@ class GroupRoutes:
         group_details = GroupWithDetails.model_validate(group)
         
         # Add blockchain verification
-        if group.contract_address:
+        if group.contract_address is not None:
             try:
                 blockchain_groups = asyncio.run(self.web3_service.get_blockchain_groups())
-                group_details.blockchain_verified = group.contract_address in blockchain_groups
-                group_details.blockchain_info = {
-                    'contract_address': group.contract_address,
-                    'creation_tx_hash': group.creation_tx_hash,
-                    'creation_block_number': group.creation_block_number,
-                    'verified': group_details.blockchain_verified
-                }
+                contract_addr = getattr(group, 'contract_address', None)
+                group_details.blockchain_verified = contract_addr in blockchain_groups if contract_addr else False
+                group_details.blockchain_info = BlockchainInfo(
+                    contract_address=getattr(group, 'contract_address', None),
+                    tx_hash=getattr(group, 'creation_tx_hash', None),
+                    block_number=getattr(group, 'creation_block_number', None),
+                    verified=group_details.blockchain_verified
+                )
             except Exception as e:
                 print(f"Blockchain verification error: {e}")
                 group_details.blockchain_verified = False
@@ -266,7 +271,7 @@ class GroupRoutes:
             setattr(db_group, field, value)
         
         # Update sync status
-        db_group.last_blockchain_sync = datetime.utcnow()
+        setattr(db_group, 'last_blockchain_sync', datetime.utcnow())
         
         db.commit()
         db.refresh(db_group)
@@ -281,7 +286,7 @@ class GroupRoutes:
         
         # Note: We only delete from database. Blockchain groups are immutable.
         # In practice, you might want to mark the group as inactive instead
-        db_group.status = GroupStatus.inactive
+        setattr(db_group, 'status', GroupStatus.inactive)
         db.commit()
         
         return {"message": "Group marked as inactive (blockchain groups cannot be deleted)"}
@@ -302,11 +307,11 @@ class GroupRoutes:
         # Check if wallet address is required and provided
         wallet_address = member_data.wallet_address
         if wallet_address:
-            user.wallet_address = wallet_address
+            setattr(user, 'wallet_address', wallet_address)
             db.add(user)
             db.commit()
             db.refresh(user)
-        if group.contract_address:  # This is a blockchain group
+        if group.contract_address is not None:  # This is a blockchain group
             if not wallet_address:
                 raise HTTPException(
                     status_code=400, 
@@ -326,11 +331,12 @@ class GroupRoutes:
             raise HTTPException(status_code=400, detail="User is already a member of this group")
         
         # Check group capacity
-        active_members = db.query(GroupMember).filter(
+        active_members_count = db.query(GroupMember).filter(
             GroupMember.group_id == group_id,
             GroupMember.status == MemberStatus.active
         ).count()
-        if active_members >= group.max_members:
+        max_members = getattr(group, 'max_members', 20)
+        if active_members_count >= max_members:
             raise HTTPException(status_code=400, detail="Group is at maximum capacity")
         
         print(f"💫 Adding member to group: {group_id}")
@@ -340,12 +346,13 @@ class GroupRoutes:
         
         try:
             # For blockchain groups, interact with smart contract first
-            if group.contract_address and wallet_address:
+            contract_address = getattr(group, 'contract_address', None)
+            if contract_address and wallet_address:
                 print("🔗 Joining group on blockchain...")
                 
                 # Call blockchain join function
                 blockchain_result = await self.web3_service.join_group(
-                    group.contract_address, 
+                    contract_address, 
                     wallet_address
                 )
                 
@@ -356,15 +363,15 @@ class GroupRoutes:
                         detail=f"Blockchain group join failed: {blockchain_result['error']}"
                     )
                 
-                print(f" Transaction prepared for user signing")
+                print(f"✅ Transaction prepared for user signing")
 
-                return {
-                "requires_signature": True,
-                "transaction": blockchain_result['transaction'],
-                "message": "Please sign the transaction with your wallet to complete joining the group.",
-                "group_id": str(group_id),
-                "user_id": str(member_data.user_id)
-                  }
+                return TransactionResponse(
+                    requires_signature=True,
+                    transaction=blockchain_result['transaction'],
+                    message="Please sign the transaction with your wallet to complete joining the group.",
+                    group_id=group_id,
+                    user_id=member_data.user_id
+                )
             
             else:
             # Create member in database
@@ -411,10 +418,14 @@ class GroupRoutes:
             raise HTTPException(status_code=400, detail="User wallet address not found")
         
         try:
-            
+            # Verify blockchain transaction
+            contract_address = getattr(group, 'contract_address', None)
+            if not contract_address:
+                raise HTTPException(status_code=400, detail="Group does not have a blockchain contract")
+                
             verification_result = await self.web3_service.verify_join_transaction(
                 tx_hash, 
-                group.contract_address, 
+                contract_address, 
                 wallet_address
             )
             
@@ -431,8 +442,8 @@ class GroupRoutes:
             ).first()
             
             if existing_member:
-                
-                existing_member.status = MemberStatus.active
+                # Update existing member status
+                setattr(existing_member, 'status', MemberStatus.active)
                 db_member = existing_member
             else:
                 
@@ -446,15 +457,21 @@ class GroupRoutes:
             db.commit()
             db.refresh(db_member)
             
+            # Create blockchain info
+            blockchain_info = GroupMemberBlockchainInfo(
+                wallet_address=wallet_address,
+                tx_hash=verification_result['tx_hash'],
+                block_number=verification_result['block_number'],
+                gas_used=verification_result['gas_used'],
+                joined_on_blockchain=True
+            )
             
-            response = GroupMemberResponse.model_validate(db_member)
-            response.blockchain_info = {
-                'wallet_address': wallet_address,
-                'tx_hash': verification_result['tx_hash'],
-                'block_number': verification_result['block_number'],
-                'gas_used': verification_result['gas_used'],
-                'joined_on_blockchain': True
-            }
+            # Create the response
+            member_response = GroupMemberResponse.model_validate(db_member)
+            response = GroupMemberConfirmationResponse(
+                **member_response.model_dump(),
+                blockchain_info=blockchain_info
+            )
             
             return response
             
@@ -584,8 +601,8 @@ class GroupRoutes:
                     
                     if existing_group:
                         # Update sync timestamp
-                        existing_group.last_blockchain_sync = datetime.utcnow()
-                        existing_group.is_blockchain_synced = True
+                        setattr(existing_group, 'last_blockchain_sync', datetime.utcnow())
+                        setattr(existing_group, 'is_blockchain_synced', True)
                     else:
                         # Log unsynced group (you might want to implement full group data retrieval)
                         print(f"Found unsynced group: {group_address}")
