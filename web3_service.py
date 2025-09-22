@@ -3,12 +3,12 @@ import json
 from datetime import datetime
 from typing import List, Dict, Any, Optional
 from web3 import Web3
-from web3.middleware.geth_poa import geth_poa_middleware
+from web3.middleware import geth_poa_middleware
 from web3.exceptions import ContractLogicError, TransactionNotFound
 from web3.types import TxParams, Wei
 from hexbytes import HexBytes
 from eth_account import Account
-from eth_utils.address import is_address, to_checksum_address
+from eth_utils import is_address, to_checksum_address
 import logging
 
 from schemas import GroupCreate
@@ -43,8 +43,8 @@ class Web3Service:
             abi=self.factory_abi
         )
         
-        # Load private key for transactions
-        self._initialize_account()
+        # Optional: Load private key only for admin operations
+        self._initialize_admin_account()
         
         # Gas configuration
         self.default_gas_limit = int(os.getenv('DEFAULT_GAS_LIMIT', '2000000'))
@@ -53,19 +53,21 @@ class Web3Service:
         # Verify connection on initialization
         self._verify_connection()
     
-    def _initialize_account(self):
-        """Initialize account from private key"""
-        self.private_key = os.getenv("PRIVATE_KEY")
-        if not self.private_key:
-            raise ValueError("PRIVATE_KEY environment variable not set")
+    def _initialize_admin_account(self):
+        """Initialize admin account from private key (optional, only for admin operations)"""
+        self.private_key = os.getenv("ADMIN_PRIVATE_KEY")
+        self.admin_account = None
         
-        try:
-            if not self.private_key.startswith('0x'):
-                self.private_key = '0x' + self.private_key
-            self.account = Account.from_key(self.private_key)
-            logger.info(f"Initialized account: {self.account.address}")
-        except Exception as e:
-            raise ValueError(f"Invalid private key: {str(e)}")
+        if self.private_key:
+            try:
+                if not self.private_key.startswith('0x'):
+                    self.private_key = '0x' + self.private_key
+                self.admin_account = Account.from_key(self.private_key)
+                logger.info(f"Initialized admin account: {self.admin_account.address}")
+            except Exception as e:
+                logger.warning(f"Admin account initialization failed: {str(e)}")
+        else:
+            logger.info("No admin private key provided - admin operations will be disabled")
     
     def _verify_connection(self):
         """Verify Web3 connection and contract"""
@@ -108,10 +110,18 @@ class Web3Service:
             logger.warning(f"Could not fetch network gas price: {e}, using default")
             return self.w3.to_wei(self.default_gas_price, 'gwei')
     
-    def _estimate_gas(self, transaction) -> int:
-        """Estimate gas for transaction with buffer"""
+    def _estimate_gas_for_user(self, transaction_data: dict, from_address: str) -> int:
+        """Estimate gas for user transaction with buffer"""
         try:
-            estimated_gas = self.w3.eth.estimate_gas(transaction)
+            # Create a transaction dict for estimation
+            tx_for_estimation = {
+                'from': to_checksum_address(from_address),
+                'to': transaction_data.get('to'),
+                'data': transaction_data.get('data'),
+                'value': transaction_data.get('value', 0)
+            }
+            
+            estimated_gas = self.w3.eth.estimate_gas(tx_for_estimation)
             # Add 20% buffer
             return int(estimated_gas * 1.2)
         except Exception as e:
@@ -128,12 +138,14 @@ class Web3Service:
             abi=self.group_abi
         )
 
-    async def create_group_on_blockchain(self, group_data: GroupCreate, creator_address: str) -> Dict[str, Any]:
-        """Create a group on the blockchain"""
+    async def prepare_group_creation_transaction(self, group_data: GroupCreate, creator_address: str) -> Dict[str, Any]:
+        """Prepare a group creation transaction for user to sign"""
         try:
             # Validate creator address
             if not self.validate_address(creator_address):
                 return {'success': False, 'error': 'Invalid creator address'}
+            
+            creator_checksum = to_checksum_address(creator_address)
             
             # Convert group data to blockchain format
             now = int(datetime.now().timestamp())
@@ -148,64 +160,57 @@ class Web3Service:
                 0,  # punishment mode
                 getattr(group_data, 'approval_required', False),
                 False,  # emergency withdraw allowed
-                to_checksum_address(creator_address),
+                creator_checksum,
                 '0x0000000000000000000000000000000000000000',  # native token
                 86400,  # grace period (1 day)
                 172800  # contribution window (2 days)
             )
             
-            # Build transaction
-            nonce = self.w3.eth.get_transaction_count(self.account.address)
-            tx_params: TxParams = {
-                'from': self.account.address,
+            # Get user's nonce
+            nonce = self.w3.eth.get_transaction_count(creator_checksum)
+            
+            # Build transaction data
+            transaction_data = self.factory_contract.functions.createGroup(config).build_transaction({
+                'from': creator_checksum,
                 'nonce': nonce,
-                'gasPrice': Wei(self._get_gas_price()),
-            }
-            transaction = self.factory_contract.functions.createGroup(config).build_transaction(tx_params)
+                'gasPrice': self._get_gas_price(),
+                'gas': self.default_gas_limit  # Will be estimated on frontend
+            })
             
             # Estimate gas
-            transaction['gas'] = self._estimate_gas(transaction)
-            
-            # Sign and send transaction
-            signed_txn = self.w3.eth.account.sign_transaction(transaction, private_key=self.private_key)
-            tx_hash = self.w3.eth.send_raw_transaction(signed_txn.rawTransaction)
-            
-            logger.info(f"Transaction sent: {tx_hash.hex()}")
-            
-            # Wait for transaction receipt with timeout
-            receipt = self.w3.eth.wait_for_transaction_receipt(tx_hash, timeout=300)
-            
-            # Check transaction status
-            if receipt['status'] == 0:
-                return {'success': False, 'error': 'Transaction failed'}
-            
-            # Parse events to get group address
-            group_address = self._parse_group_created_event(receipt)
+            estimated_gas = self._estimate_gas_for_user(transaction_data, creator_address)
             
             return {
                 'success': True,
-                'tx_hash': tx_hash.hex(),
-                'block_number': receipt['blockNumber'],
-                'group_address': group_address,
-                'gas_used': receipt['gasUsed'],
-                'effective_gas_price': receipt.get('effectiveGasPrice')
+                'transaction': {
+                    'to': self.factory_address,
+                    'from': creator_address.lower(),
+                    'data': transaction_data['data'],
+                    'gas': hex(estimated_gas),
+                    'gasPrice': hex(transaction_data['gasPrice']),
+                    'nonce': hex(nonce),
+                    'value': '0x0',
+                    'chainId': self.w3.eth.chain_id
+                },
+                'message': 'Transaction prepared. Please sign with your wallet.',
+                'estimated_gas': estimated_gas
             }
             
-        except ContractLogicError as e:
-            logger.error(f"Contract logic error: {e}")
-            return {'success': False, 'error': f'Contract error: {str(e)}'}
         except Exception as e:
-            logger.error(f"Group creation failed: {e}")
+            logger.error(f"Group creation preparation failed: {e}")
             return {'success': False, 'error': str(e)}
 
-    async def join_group(self, group_address: str, user_address: str) -> Dict[str, Any]:
-        """Join a group on the blockchain"""
+    async def prepare_join_group_transaction(self, group_address: str, user_address: str) -> Dict[str, Any]:
+        """Prepare a join group transaction for user to sign"""
         try:
             if not self.validate_address(group_address):
                 return {'success': False, 'error': 'Invalid group address'}
             
             if not self.validate_address(user_address):
                 return {'success': False, 'error': 'Invalid user address'}
+            
+            user_checksum = to_checksum_address(user_address)
+            group_checksum = to_checksum_address(group_address)
             
             # Get group contract instance
             group_contract = self._get_group_contract(group_address)
@@ -217,39 +222,94 @@ class Web3Service:
             except Exception as e:
                 return {'success': False, 'error': 'Group contract not found or invalid'}
             
-            # Build transaction
-            nonce = self.w3.eth.get_transaction_count(self.account.address)
-            tx_params: TxParams = {
-                'from': self.account.address,
+            # Get user's nonce
+            nonce = self.w3.eth.get_transaction_count(user_checksum)
+            
+            # Build transaction data
+            transaction_data = group_contract.functions.joinGroup().build_transaction({
+                'from': user_checksum,
                 'nonce': nonce,
-                'gasPrice': Wei(self._get_gas_price()),
-            }
-            transaction = group_contract.functions.joinGroup().build_transaction(tx_params)
+                'gasPrice': self._get_gas_price(),
+                'gas': self.default_gas_limit
+            })
             
             # Estimate gas
-            transaction['gas'] = self._estimate_gas(transaction)
+            estimated_gas = self._estimate_gas_for_user(transaction_data, user_address)
             
-            # Sign and send transaction
             return {
-                    'success': True,
-                    'transaction': {
-                        'to': group_address,
-                        'from': user_address,
-                        'data': transaction.get('data', ''),
-                        'gas': hex(transaction['gas']),
-                        'gasPrice': hex(transaction.get('gasPrice', 0)),
-                        'nonce': hex(nonce),
-                        'value': '0x0'
-                    },
-                    'message': 'Transaction prepared. Please sign with your wallet.'
-                }
+                'success': True,
+                'transaction': {
+                    'to': group_address.lower(),
+                    'from': user_address.lower(),
+                    'data': transaction_data['data'],
+                    'gas': hex(estimated_gas),
+                    'gasPrice': hex(transaction_data['gasPrice']),
+                    'nonce': hex(nonce),
+                    'value': '0x0',
+                    'chainId': self.w3.eth.chain_id
+                },
+                'message': 'Transaction prepared. Please sign with your wallet.',
+                'estimated_gas': estimated_gas
+            }
                  
         except Exception as e:
             logger.error(f"Join group preparation failed: {e}")
             return {'success': False, 'error': str(e)}
 
-    async def verify_join_transaction(self, tx_hash: str, group_address: str, user_address: str) -> Dict[str, Any]:
-        """Verify that a join transaction was successful"""
+    async def prepare_contribute_transaction(self, group_address: str, user_address: str, contribution_amount: int) -> Dict[str, Any]:
+        """Prepare a contribution transaction for user to sign"""
+        try:
+            if not self.validate_address(group_address):
+                return {'success': False, 'error': 'Invalid group address'}
+            
+            if not self.validate_address(user_address):
+                return {'success': False, 'error': 'Invalid user address'}
+            
+            user_checksum = to_checksum_address(user_address)
+            group_checksum = to_checksum_address(group_address)
+            
+            # Get group contract instance
+            group_contract = self._get_group_contract(group_address)
+            
+            # Get user's nonce
+            nonce = self.w3.eth.get_transaction_count(user_checksum)
+            
+            # Build transaction data
+            transaction_data = group_contract.functions.contribute().build_transaction({
+                'from': user_checksum,
+                'value': contribution_amount,
+                'nonce': nonce,
+                'gasPrice': self._get_gas_price(),
+                'gas': self.default_gas_limit
+            })
+            
+            # Estimate gas
+            estimated_gas = self._estimate_gas_for_user(transaction_data, user_address)
+            
+            return {
+                'success': True,
+                'transaction': {
+                    'to': group_address.lower(),
+                    'from': user_address.lower(),
+                    'data': transaction_data['data'],
+                    'gas': hex(estimated_gas),
+                    'gasPrice': hex(transaction_data['gasPrice']),
+                    'nonce': hex(nonce),
+                    'value': hex(contribution_amount),
+                    'chainId': self.w3.eth.chain_id
+                },
+                'message': 'Transaction prepared. Please sign with your wallet.',
+                'estimated_gas': estimated_gas,
+                'contribution_amount_wei': str(contribution_amount),
+                'contribution_amount_eth': str(self.w3.from_wei(contribution_amount, 'ether'))
+            }
+            
+        except Exception as e:
+            logger.error(f"Contribution preparation failed: {e}")
+            return {'success': False, 'error': str(e)}
+
+    async def verify_user_transaction(self, tx_hash: str, expected_from: str, expected_to: str = None) -> Dict[str, Any]:
+        """Verify that a user-submitted transaction was successful"""
         try:
             # Convert string to HexBytes for proper type handling
             if not tx_hash.startswith('0x'):
@@ -262,29 +322,200 @@ class Web3Service:
             # Check transaction status
             if receipt['status'] == 0:
                 return {'success': False, 'error': 'Transaction failed'}
-                
-            # Verify transaction was sent to correct contract
-            if receipt.get('to', '').lower() != group_address.lower():
-                return {'success': False, 'error': 'Transaction was not sent to the correct contract'}
-                
             
-            group_contract = self._get_group_contract(group_address)
-            is_member = group_contract.functions.isMember(user_address).call()
+            # Get transaction details
+            transaction = self.w3.eth.get_transaction(hash_bytes)
             
-            if not is_member:
-                return {'success': False, 'error': 'User is not registered as a member after transaction'}
+            # Verify the transaction was sent from the expected address
+            if transaction.get('from', '').lower() != expected_from.lower():
+                return {
+                    'success': False, 
+                    'error': f'Transaction was not sent from expected address. Expected: {expected_from}, Got: {transaction.get("from", "")}'
+                }
+            
+            # Verify destination if provided
+            if expected_to and transaction.get('to', '').lower() != expected_to.lower():
+                return {
+                    'success': False,
+                    'error': f'Transaction was not sent to expected contract. Expected: {expected_to}, Got: {transaction.get("to", "")}'
+                }
                 
             return {
                 'success': True,
                 'tx_hash': tx_hash,
                 'block_number': receipt['blockNumber'],
                 'gas_used': receipt['gasUsed'],
-                'effective_gas_price': receipt.get('effectiveGasPrice')
+                'effective_gas_price': receipt.get('effectiveGasPrice'),
+                'from': transaction.get('from', '').lower(),
+                'to': transaction.get('to', '').lower() if transaction.get('to') else None,
+                'value': str(transaction.get('value', 0))
             }
             
         except Exception as e:
             logger.error(f"Transaction verification failed: {e}")
             return {'success': False, 'error': str(e)}
+
+    async def verify_group_creation_transaction(self, tx_hash: str, creator_address: str) -> Dict[str, Any]:
+        """Verify a group creation transaction and extract the group address"""
+        try:
+            verification_result = await self.verify_user_transaction(
+                tx_hash, 
+                creator_address, 
+                self.factory_address
+            )
+            
+            if not verification_result['success']:
+                return verification_result
+            
+            # Get transaction receipt to parse events
+            if not tx_hash.startswith('0x'):
+                tx_hash = '0x' + tx_hash
+            hash_bytes = HexBytes(tx_hash)
+            receipt = self.w3.eth.get_transaction_receipt(hash_bytes)
+            
+            # Parse events to get group address
+            group_address = self._parse_group_created_event(receipt)
+            
+            if not group_address:
+                return {'success': False, 'error': 'Could not extract group address from transaction'}
+            
+            verification_result['group_address'] = group_address
+            return verification_result
+            
+        except Exception as e:
+            logger.error(f"Group creation verification failed: {e}")
+            return {'success': False, 'error': str(e)}
+
+    async def verify_join_transaction(self, tx_hash: str, group_address: str, user_address: str) -> Dict[str, Any]:
+        """Verify that a join transaction was successful"""
+        try:
+            verification_result = await self.verify_user_transaction(
+                tx_hash, 
+                user_address, 
+                group_address
+            )
+            
+            if not verification_result['success']:
+                return verification_result
+            
+            # Additional verification: check if user is now a member
+            group_contract = self._get_group_contract(group_address)
+            is_member = group_contract.functions.isMember(to_checksum_address(user_address)).call()
+            
+            if not is_member:
+                return {'success': False, 'error': 'User is not registered as a member after transaction'}
+                
+            return verification_result
+            
+        except Exception as e:
+            logger.error(f"Join transaction verification failed: {e}")
+            return {'success': False, 'error': str(e)}
+
+    async def verify_contribution_transaction(self, tx_hash: str, group_address: str, user_address: str, expected_amount: int = None) -> Dict[str, Any]:
+        """Verify that a contribution transaction was successful"""
+        try:
+            verification_result = await self.verify_user_transaction(
+                tx_hash, 
+                user_address, 
+                group_address
+            )
+            
+            if not verification_result['success']:
+                return verification_result
+            
+            # Verify the contribution amount if provided
+            if expected_amount is not None:
+                actual_amount = int(verification_result['value'])
+                if actual_amount != expected_amount:
+                    return {
+                        'success': False, 
+                        'error': f'Contribution amount mismatch. Expected: {expected_amount}, Got: {actual_amount}'
+                    }
+            
+            # Add contribution details to response
+            verification_result['contribution_amount_wei'] = verification_result['value']
+            verification_result['contribution_amount_eth'] = str(self.w3.from_wei(int(verification_result['value']), 'ether'))
+            
+            return verification_result
+            
+        except Exception as e:
+            logger.error(f"Contribution verification failed: {e}")
+            return {'success': False, 'error': str(e)}
+
+    # Admin-only functions (requires admin private key)
+    async def admin_approve_join_request(self, group_address: str, applicant_address: str) -> Dict[str, Any]:
+        """Admin function to approve a join request (requires admin private key)"""
+        if not self.admin_account:
+            return {'success': False, 'error': 'Admin account not configured'}
+        
+        try:
+            if not self.validate_address(group_address) or not self.validate_address(applicant_address):
+                return {'success': False, 'error': 'Invalid address'}
+            
+            group_contract = self._get_group_contract(group_address)
+            
+            # Build transaction
+            nonce = self.w3.eth.get_transaction_count(self.admin_account.address)
+            tx_params: TxParams = {
+                'from': self.admin_account.address,
+                'nonce': nonce,
+                'gasPrice': Wei(self._get_gas_price()),
+            }
+            transaction = group_contract.functions.approveJoinRequest(
+                to_checksum_address(applicant_address)
+            ).build_transaction(tx_params)
+            
+            # Estimate gas
+            transaction['gas'] = self._estimate_gas_for_user(transaction, self.admin_account.address)
+            
+            # Sign and send transaction
+            signed_txn = self.w3.eth.account.sign_transaction(transaction, private_key=self.private_key)
+            tx_hash = self.w3.eth.send_raw_transaction(signed_txn.rawTransaction)
+            
+            logger.info(f"Admin approval transaction sent: {tx_hash.hex()}")
+            
+            # Wait for transaction receipt
+            receipt = self.w3.eth.wait_for_transaction_receipt(tx_hash, timeout=300)
+            
+            if receipt['status'] == 0:
+                return {'success': False, 'error': 'Transaction failed'}
+            
+            return {
+                'success': True,
+                'tx_hash': tx_hash.hex(),
+                'block_number': receipt['blockNumber'],
+                'gas_used': receipt['gasUsed'],
+                'message': f'Join request approved for {applicant_address}'
+            }
+            
+        except ContractLogicError as e:
+            logger.error(f"Contract logic error during approval: {e}")
+            return {'success': False, 'error': f'Contract error: {str(e)}'}
+        except Exception as e:
+            logger.error(f"Admin approval failed: {e}")
+            return {'success': False, 'error': str(e)}
+
+    # Helper function to get current gas prices for frontend
+    async def get_gas_estimates(self) -> Dict[str, Any]:
+        """Get current gas price estimates for frontend"""
+        try:
+            current_gas_price = self._get_gas_price()
+            
+            return {
+                'success': True,
+                'gas_price_wei': str(current_gas_price),
+                'gas_price_gwei': str(self.w3.from_wei(current_gas_price, 'gwei')),
+                'estimates': {
+                    'slow': str(int(current_gas_price * 0.8)),
+                    'standard': str(current_gas_price),
+                    'fast': str(int(current_gas_price * 1.2))
+                }
+            }
+        except Exception as e:
+            logger.error(f"Error getting gas estimates: {e}")
+            return {'success': False, 'error': str(e)}
+
+    # Keep all the existing read-only methods unchanged
     async def get_member_details(self, group_address: str, member_address: str) -> Dict[str, Any]:
         """Get member details from group contract"""
         try:
@@ -312,51 +543,96 @@ class Web3Service:
             logger.error(f"Error getting member details: {e}")
             return {'success': False, 'error': str(e)}
 
-    async def contribute_to_group(self, group_address: str, contribution_amount: int) -> Dict[str, Any]:
-        """Make a contribution to a group"""
+    async def is_member(self, group_address: str, member_address: str) -> Dict[str, Any]:
+        """Check if address is a member of the group"""
+        try:
+            if not self.validate_address(group_address) or not self.validate_address(member_address):
+                return {'success': False, 'error': 'Invalid address'}
+            
+            group_contract = self._get_group_contract(group_address)
+            is_member = group_contract.functions.isMember(to_checksum_address(member_address)).call()
+            
+            return {
+                'success': True,
+                'is_member': is_member
+            }
+            
+        except Exception as e:
+            logger.error(f"Error checking membership: {e}")
+            return {'success': False, 'error': str(e)}
+
+    async def get_member_joined_events(self, group_address: str, from_block: int = 0) -> Dict[str, Any]:
+        """Get all MemberJoined events for a group"""
         try:
             if not self.validate_address(group_address):
                 return {'success': False, 'error': 'Invalid group address'}
             
             group_contract = self._get_group_contract(group_address)
             
-            # Build transaction
-            nonce = self.w3.eth.get_transaction_count(self.account.address)
-            tx_params: TxParams = {
-                'from': self.account.address,
-                'value': Wei(contribution_amount),
-                'nonce': nonce,
-                'gasPrice': Wei(self._get_gas_price()),
-            }
-            transaction = group_contract.functions.contribute().build_transaction(tx_params)
+            # Get MemberJoined events
+            event_filter = group_contract.events.MemberJoined.create_filter(
+                fromBlock=from_block,
+                toBlock='latest'
+            )
+            events = event_filter.get_all_entries()
             
-            # Estimate gas
-            transaction['gas'] = self._estimate_gas(transaction)
-            
-            # Sign and send transaction
-            signed_txn = self.w3.eth.account.sign_transaction(transaction, private_key=self.private_key)
-            tx_hash = self.w3.eth.send_raw_transaction(signed_txn.rawTransaction)
-            
-            logger.info(f"Contribution transaction sent: {tx_hash.hex()}")
-            
-            # Wait for transaction receipt
-            receipt = self.w3.eth.wait_for_transaction_receipt(tx_hash, timeout=300)
-            
-            if receipt['status'] == 0:
-                return {'success': False, 'error': 'Transaction failed'}
+            member_events = []
+            for event in events:
+                member_events.append({
+                    'user': event.args.user.lower(),
+                    'block_number': event.blockNumber,
+                    'transaction_hash': event.transactionHash.hex(),
+                    'timestamp': event.args.get('timestamp', None)
+                })
             
             return {
                 'success': True,
-                'tx_hash': tx_hash.hex(),
-                'block_number': receipt['blockNumber'],
-                'gas_used': receipt['gasUsed']
+                'events': member_events,
+                'count': len(member_events)
             }
             
-        except ContractLogicError as e:
-            logger.error(f"Contract logic error during contribution: {e}")
-            return {'success': False, 'error': f'Contract error: {str(e)}'}
         except Exception as e:
-            logger.error(f"Contribution failed: {e}")
+            logger.error(f"Error getting member events: {e}")
+            return {'success': False, 'error': str(e)}
+
+    async def check_group_status(self, group_address: str) -> Dict[str, Any]:
+        """Check comprehensive group status including member limits"""
+        try:
+            if not self.validate_address(group_address):
+                return {'success': False, 'error': 'Invalid group address'}
+            
+            group_contract = self._get_group_contract(group_address)
+            
+            # Get basic group info
+            member_count = group_contract.functions.memberCount().call()
+            
+            # Try to get max members (this might not be directly available in all contracts)
+            try:
+                # This assumes there's a way to get max members - adjust based on your contract
+                group_info = await self.get_group_info(group_address)
+                max_members = group_info.get('max_members', 0) if group_info else 0
+            except Exception:
+                max_members = 0
+            
+            # Check if group is full
+            is_full = max_members > 0 and member_count >= max_members
+            
+            # Get current block time for status checks
+            current_block = self.w3.eth.block_number
+            block = self.w3.eth.get_block(current_block)
+            current_time = block.timestamp
+            
+            return {
+                'success': True,
+                'member_count': member_count,
+                'max_members': max_members,
+                'is_full': is_full,
+                'available_spots': max(0, max_members - member_count) if max_members > 0 else float('inf'),
+                'current_time': current_time
+            }
+            
+        except Exception as e:
+            logger.error(f"Error checking group status: {e}")
             return {'success': False, 'error': str(e)}
 
     async def get_group_member_count(self, group_address: str) -> int:
@@ -446,6 +722,7 @@ class Web3Service:
                         'verified': False
                     }
         except Exception as e:
+            
             logger.error(f"Error fetching group info for {group_address}: {e}")
             return None
 

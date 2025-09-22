@@ -31,137 +31,332 @@ class GroupRoutes:
         self.router.add_api_route("/{group_id}", self.update_group, methods=["PUT"], response_model=GroupResponse)
         self.router.add_api_route("/{group_id}", self.delete_group, methods=["DELETE"])
         
-        # Member management
+        # Member management with Web3 integration
         self.router.add_api_route("/{group_id}/members", self.add_member, methods=["POST"], response_model=Union[GroupMemberResponse, TransactionResponse])
         self.router.add_api_route("/{group_id}/members/confirm", self.confirm_member_join, methods=["POST"], response_model=GroupMemberConfirmationResponse)
-
         self.router.add_api_route("/{group_id}/members", self.get_group_members, methods=["GET"], response_model=List[GroupMemberResponse])
         self.router.add_api_route("/{group_id}/members/{member_id}", self.update_member, methods=["PUT"], response_model=GroupMemberResponse)
         self.router.add_api_route("/{group_id}/members/{member_id}", self.remove_member, methods=["DELETE"])
         
-        # Admin management
+        # NEW: Web3 transaction preparation endpoints
+        self.router.add_api_route("/{group_id}/create-transaction", self.prepare_group_creation_transaction, methods=["POST"])
+        self.router.add_api_route("/{group_id}/join-transaction", self.prepare_join_transaction, methods=["POST"])
+        self.router.add_api_route("/{group_id}/contribute-transaction", self.prepare_contribute_transaction, methods=["POST"])
+        
+        # NEW: Web3 transaction verification endpoints
+        self.router.add_api_route("/{group_id}/verify-creation", self.verify_group_creation, methods=["POST"])
+        self.router.add_api_route("/{group_id}/verify-join", self.verify_join_transaction, methods=["POST"])
+        self.router.add_api_route("/{group_id}/verify-contribution", self.verify_contribution_transaction, methods=["POST"])
+        
+        # Admin management with Web3 integration
         self.router.add_api_route("/{group_id}/admins", self.add_admin, methods=["POST"], response_model=GroupAdminResponse)
         self.router.add_api_route("/{group_id}/admins", self.get_group_admins, methods=["GET"], response_model=List[GroupAdminResponse])
         self.router.add_api_route("/{group_id}/admins/{admin_id}", self.remove_admin, methods=["DELETE"])
         
+        # NEW: Admin approval system for blockchain groups
+        self.router.add_api_route("/{group_id}/admin/approve-join", self.admin_approve_join_request, methods=["POST"])
+        self.router.add_api_route("/{group_id}/pending-members", self.get_pending_members, methods=["GET"])
+        
         # User-specific routes
         self.router.add_api_route("/user/{user_id}", self.get_user_groups, methods=["GET"], response_model=List[GroupResponse])
         
-        # New Web3/Blockchain routes
+        # Web3/Blockchain routes
         self.router.add_api_route("/blockchain/sync", self.sync_blockchain_groups, methods=["POST"], response_model=BlockchainSyncResponse)
         self.router.add_api_route("/blockchain/stats", self.get_blockchain_stats, methods=["GET"])
+        self.router.add_api_route("/blockchain/gas-estimates", self.get_gas_estimates, methods=["GET"])
         self.router.add_api_route("/creator/{creator_address}/blockchain", self.get_creator_groups_blockchain, methods=["GET"])
     
-    async def create_group(self, group_data: GroupCreate, db: Session = Depends(get_db)) -> GroupResponse:
-        """Create a new group both in database and on blockchain"""
+    # NEW: Web3 Transaction Preparation Endpoints
+    async def prepare_group_creation_transaction(self, group_data: GroupCreate, db: Session = Depends(get_db)) -> dict:
+        """Prepare a group creation transaction for user to sign with their wallet"""
         # Verify creator exists
         creator = db.query(Profile).filter(Profile.user_id == group_data.created_by).first()
         if not creator:
             raise HTTPException(status_code=404, detail="Creator profile not found")
         
-        # Use wallet address from the request data instead of user profile
         creator_address = group_data.wallet_address
         if not creator_address:
-            raise HTTPException(status_code=400, detail="Wallet address is required to create blockchain-enabled groups.")
+            raise HTTPException(status_code=400, detail="Wallet address is required")
         
-        # Validate wallet address format (basic validation)
         if not creator_address.startswith('0x') or len(creator_address) != 42:
-            raise HTTPException(status_code=400, detail="Invalid wallet address format.")
-        
-        print(f"🏠 Using wallet address from request: {creator_address}")
-        print(f"👤 Creating group for user: {group_data.created_by}")
-        print(f"📝 Group data: {group_data.model_dump()}")
+            raise HTTPException(status_code=400, detail="Invalid wallet address format")
         
         try:
-            # Optionally update the user's profile with the wallet address if it's not already set
-            # if not creator.wallet_address:
-            #     print(f"💾 Saving wallet address to user profile: {creator_address}")
-            #     creator.wallet_address = creator_address
-            #     db.add(creator)
-               
+            result = await self.web3_service.prepare_group_creation_transaction(group_data, creator_address)
+            if not result['success']:
+                raise HTTPException(status_code=500, detail=result['error'])
             
-            # Create group on blockchain first
-            print("🔗 Creating group on blockchain...")
-            blockchain_result = await self.web3_service.create_group_on_blockchain(group_data, creator_address)
+            return result
             
-            if not blockchain_result['success']:
-                print(f"❌ Blockchain creation failed: {blockchain_result['error']}")
-                raise HTTPException(
-                    status_code=500, 
-                    detail=f"Blockchain group creation failed: {blockchain_result['error']}"
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Failed to prepare transaction: {str(e)}")
+    
+    async def prepare_join_transaction(self, group_id: UUID, user_address: str, db: Session = Depends(get_db)) -> dict:
+        """Prepare a join group transaction for user to sign"""
+        # Verify group exists and get contract address
+        group = db.query(Group).filter(Group.id == group_id).first()
+        if not group:
+            raise HTTPException(status_code=404, detail="Group not found")
+        
+        contract_address = getattr(group, 'contract_address', None)
+        if not contract_address:
+            raise HTTPException(status_code=400, detail="Group does not have a blockchain contract")
+        
+        try:
+            result = await self.web3_service.prepare_join_group_transaction(contract_address, user_address)
+            if not result['success']:
+                raise HTTPException(status_code=500, detail=result['error'])
+            
+            return result
+            
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Failed to prepare join transaction: {str(e)}")
+    
+    async def prepare_contribute_transaction(
+        self, 
+        group_id: UUID, 
+        user_address: str, 
+        contribution_amount: int, 
+        db: Session = Depends(get_db)
+    ) -> dict:
+        """Prepare a contribution transaction for user to sign"""
+        # Verify group exists
+        group = db.query(Group).filter(Group.id == group_id).first()
+        if not group:
+            raise HTTPException(status_code=404, detail="Group not found")
+        
+        contract_address = getattr(group, 'contract_address', None)
+        if not contract_address:
+            raise HTTPException(status_code=400, detail="Group does not have a blockchain contract")
+        
+        try:
+            result = await self.web3_service.prepare_contribute_transaction(
+                contract_address, user_address, contribution_amount
+            )
+            if not result['success']:
+                raise HTTPException(status_code=500, detail=result['error'])
+            
+            return result
+            
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Failed to prepare contribution transaction: {str(e)}")
+    
+    # NEW: Web3 Transaction Verification Endpoints
+    async def verify_group_creation(
+        self, 
+        group_id: UUID, 
+        tx_hash: str, 
+        creator_address: str, 
+        db: Session = Depends(get_db)
+    ) -> dict:
+        """Verify group creation transaction and update database"""
+        try:
+            result = await self.web3_service.verify_group_creation_transaction(tx_hash, creator_address)
+            if not result['success']:
+                raise HTTPException(status_code=400, detail=result['error'])
+            
+            # Update group in database with blockchain info
+            group = db.query(Group).filter(Group.id == group_id).first()
+            if group:
+                setattr(group, 'contract_address', result['group_address'])
+                setattr(group, 'creation_tx_hash', result['tx_hash'])
+                setattr(group, 'creation_block_number', result['block_number'])
+                setattr(group, 'is_blockchain_synced', True)
+                setattr(group, 'last_blockchain_sync', datetime.utcnow())
+                db.commit()
+            
+            return result
+            
+        except Exception as e:
+            db.rollback()
+            raise HTTPException(status_code=500, detail=f"Verification failed: {str(e)}")
+    
+    async def verify_join_transaction(
+        self, 
+        group_id: UUID, 
+        tx_hash: str, 
+        user_address: str, 
+        user_id: UUID,
+        db: Session = Depends(get_db)
+    ) -> dict:
+        """Verify join transaction and update member status"""
+        # Get group contract address
+        group = db.query(Group).filter(Group.id == group_id).first()
+        if not group:
+            raise HTTPException(status_code=404, detail="Group not found")
+        
+        contract_address = getattr(group, 'contract_address', None)
+        if not contract_address:
+            raise HTTPException(status_code=400, detail="Group does not have a blockchain contract")
+        
+        try:
+            result = await self.web3_service.verify_join_transaction(tx_hash, contract_address, user_address)
+            if not result['success']:
+                raise HTTPException(status_code=400, detail=result['error'])
+            
+            # Update or create member record
+            existing_member = db.query(GroupMember).filter(
+                GroupMember.group_id == group_id,
+                GroupMember.user_id == user_id
+            ).first()
+            
+            if existing_member:
+                setattr(existing_member, 'status', MemberStatus.active)
+            else:
+                db_member = GroupMember(
+                    group_id=group_id,
+                    user_id=user_id,
+                    status=MemberStatus.active
                 )
+                db.add(db_member)
             
-            print(f"✅ Blockchain group created: {blockchain_result}")
+            db.commit()
+            return result
             
-            # Create group in database with blockchain info
+        except Exception as e:
+            db.rollback()
+            raise HTTPException(status_code=500, detail=f"Join verification failed: {str(e)}")
+    
+    async def verify_contribution_transaction(
+        self, 
+        group_id: UUID, 
+        tx_hash: str, 
+        user_address: str, 
+        expected_amount: Optional[int] = None,
+        db: Session = Depends(get_db)
+    ) -> dict:
+        """Verify contribution transaction"""
+        # Get group contract address
+        group = db.query(Group).filter(Group.id == group_id).first()
+        if not group:
+            raise HTTPException(status_code=404, detail="Group not found")
+        
+        contract_address = getattr(group, 'contract_address', None)
+        if not contract_address:
+            raise HTTPException(status_code=400, detail="Group does not have a blockchain contract")
+        
+        try:
+            result = await self.web3_service.verify_contribution_transaction(
+                tx_hash, contract_address, user_address, expected_amount
+            )
+            if not result['success']:
+                raise HTTPException(status_code=400, detail=result['error'])
+            
+            return result
+            
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Contribution verification failed: {str(e)}")
+    
+    # NEW: Admin Approval System
+    async def admin_approve_join_request(
+        self, 
+        group_id: UUID, 
+        applicant_address: str, 
+        admin_user_id: UUID,
+        db: Session = Depends(get_db)
+    ) -> dict:
+        """Admin approves a join request on the blockchain (requires admin private key in Web3Service)"""
+        # Verify group exists
+        group = db.query(Group).filter(Group.id == group_id).first()
+        if not group:
+            raise HTTPException(status_code=404, detail="Group not found")
+        
+        # Verify admin permissions
+        admin = db.query(GroupAdmin).filter(
+            GroupAdmin.group_id == group_id,
+            GroupAdmin.user_id == admin_user_id
+        ).first()
+        if not admin:
+            raise HTTPException(status_code=403, detail="User is not an admin of this group")
+        
+        contract_address = getattr(group, 'contract_address', None)
+        if not contract_address:
+            raise HTTPException(status_code=400, detail="Group does not have a blockchain contract")
+        
+        try:
+            result = await self.web3_service.admin_approve_join_request(contract_address, applicant_address)
+            if not result['success']:
+                raise HTTPException(status_code=500, detail=result['error'])
+            
+            return result
+            
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Admin approval failed: {str(e)}")
+    
+    def get_pending_members(self, group_id: UUID, db: Session = Depends(get_db)) -> List[GroupMemberResponse]:
+        """Get members with pending status (waiting for admin approval)"""
+        pending_members = db.query(GroupMember).filter(
+            GroupMember.group_id == group_id,
+            GroupMember.status == MemberStatus.pending
+        ).all()
+        
+        return [GroupMemberResponse.model_validate(member) for member in pending_members]
+    
+    # NEW: Gas estimates endpoint
+    async def get_gas_estimates(self) -> dict:
+        """Get current gas price estimates for frontend"""
+        try:
+            result = await self.web3_service.get_gas_estimates()
+            if not result['success']:
+                raise HTTPException(status_code=500, detail=result['error'])
+            
+            return result
+            
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Failed to get gas estimates: {str(e)}")
+    
+    async def create_group(self, group_data: GroupCreate, db: Session = Depends(get_db)) -> GroupResponse:
+        """Create a new group (database only - blockchain creation requires separate transaction signing)"""
+        # Verify creator exists
+        creator = db.query(Profile).filter(Profile.user_id == group_data.created_by).first()
+        if not creator:
+            raise HTTPException(status_code=404, detail="Creator profile not found")
+        
+        try:
+            # Create group in database first (without blockchain info)
             group_dict = group_data.model_dump()
             
             # Remove fields that aren't in the database model
             group_dict.pop('wallet_address', None)
             group_dict.pop('network_info', None)
             
-            # Add blockchain info
+            # Set initial blockchain sync status
             group_dict.update({
-                'contract_address': blockchain_result['group_address'],
-                'creation_tx_hash': blockchain_result['tx_hash'],
-                'creation_block_number': blockchain_result['block_number'],
-                'is_blockchain_synced': True,
-                'last_blockchain_sync': datetime.utcnow()
+                'contract_address': None,  # Will be updated after blockchain transaction
+                'creation_tx_hash': None,
+                'creation_block_number': None,
+                'is_blockchain_synced': False,
+                'last_blockchain_sync': None
             })
-            
-            print(f"📦 Creating database record with: {group_dict}")
             
             db_group = Group(**group_dict)
             db.add(db_group)
             db.commit()
             db.refresh(db_group)
             
-            print(f"✅ Database group created with ID: {db_group.id}")
-            
             # Add creator as admin
-            group_uuid = getattr(db_group, 'id')
             admin_data = GroupAdminCreate(
-                group_id=group_uuid,
+                group_id=getattr(db_group, 'id'),
                 user_id=group_data.created_by
             )
             db_admin = GroupAdmin(**admin_data.model_dump())
             db.add(db_admin)
             
-            # Add creator as member
+            # Add creator as member (pending blockchain confirmation)
             member_data = GroupMemberCreate(
-                group_id=group_uuid,
+                group_id=getattr(db_group, 'id'),
                 user_id=group_data.created_by,
-                wallet_address=creator_address
+                wallet_address=group_data.wallet_address
             )
-            db_member = GroupMember(**member_data.model_dump(), status=MemberStatus.active)
+            db_member = GroupMember(**member_data.model_dump(), status=MemberStatus.pending)
             db.add(db_member)
             
             db.commit()
             
-            print("✅ Creator added as admin and member")
+            return GroupResponse.model_validate(db_group)
             
-            # Create response with blockchain info
-            response = GroupResponse.model_validate(db_group)
-            response.blockchain_info = BlockchainInfo(
-                contract_address=blockchain_result['group_address'],
-                tx_hash=blockchain_result['tx_hash'],
-                block_number=blockchain_result['block_number'],
-                gas_used=blockchain_result['gas_used'],
-                verified=True
-            )
-            
-            print(f"🎉 Group creation completed successfully: {response.id}")
-            return response
-            
-        except HTTPException:
-            db.rollback()
-            raise
         except Exception as e:
             db.rollback()
-            print(f"❌ Group creation failed with error: {str(e)}")
-            print(f"❌ Error type: {type(e)}")
-            import traceback
-            print(f"❌ Traceback: {traceback.format_exc()}")
             raise HTTPException(status_code=500, detail=f"Group creation failed: {str(e)}")
     
     def get_groups(
@@ -291,9 +486,9 @@ class GroupRoutes:
         
         return {"message": "Group marked as inactive (blockchain groups cannot be deleted)"}
     
-    # Updated add_member method with wallet requirement
-    async def add_member(self, group_id: UUID, member_data: GroupMemberCreate, db: Session = Depends(get_db)) -> Union[GroupMemberResponse,TransactionResponse]:
-        """Add a member to a group - requires wallet address for blockchain groups"""
+    # Updated add_member method with prepare/verify pattern
+    async def add_member(self, group_id: UUID, member_data: GroupMemberCreate, db: Session = Depends(get_db)) -> Union[GroupMemberResponse, TransactionResponse]:
+        """Add a member to a group - for blockchain groups, this prepares the transaction"""
         # Verify group exists
         group = db.query(Group).filter(Group.id == group_id).first()
         if not group:
@@ -311,6 +506,7 @@ class GroupRoutes:
             db.add(user)
             db.commit()
             db.refresh(user)
+            
         if group.contract_address is not None:  # This is a blockchain group
             if not wallet_address:
                 raise HTTPException(
@@ -339,32 +535,31 @@ class GroupRoutes:
         if active_members_count >= max_members:
             raise HTTPException(status_code=400, detail="Group is at maximum capacity")
         
-        print(f"💫 Adding member to group: {group_id}")
-        print(f"👤 User ID: {member_data.user_id}")
-        print(f"🏠 Wallet address: {wallet_address}")
-        print(f"🔗 Group contract: {group.contract_address}")
-        
         try:
-            # For blockchain groups, interact with smart contract first
+            # For blockchain groups, prepare the transaction
             contract_address = getattr(group, 'contract_address', None)
             if contract_address and wallet_address:
-                print("🔗 Joining group on blockchain...")
-                
-                # Call blockchain join function
-                blockchain_result = await self.web3_service.join_group(
+                # Prepare blockchain join transaction
+                blockchain_result = await self.web3_service.prepare_join_group_transaction(
                     contract_address, 
                     wallet_address
                 )
                 
                 if not blockchain_result['success']:
-                    print(f"❌ Blockchain join failed: {blockchain_result['error']}")
                     raise HTTPException(
                         status_code=500, 
-                        detail=f"Blockchain group join failed: {blockchain_result['error']}"
+                        detail=f"Failed to prepare blockchain transaction: {blockchain_result['error']}"
                     )
                 
-                print(f"✅ Transaction prepared for user signing")
-
+                # Create pending member record in database
+                db_member = GroupMember(
+                    group_id=group_id,
+                    user_id=member_data.user_id,
+                    status=MemberStatus.pending  # Will be activated after transaction verification
+                )
+                db.add(db_member)
+                db.commit()
+                
                 return TransactionResponse(
                     requires_signature=True,
                     transaction=blockchain_result['transaction'],
@@ -374,18 +569,16 @@ class GroupRoutes:
                 )
             
             else:
-            # Create member in database
+                # Create member in database directly (non-blockchain group)
                 db_member = GroupMember(
                     group_id=group_id,
                     user_id=member_data.user_id,
-                    status=MemberStatus.pending  # or active based on your logic
+                    status=MemberStatus.active
                 )
                 
                 db.add(db_member)
                 db.commit()
                 db.refresh(db_member)
-                
-                print(f"✅ Database member created with ID: {db_member.id}")
                 
                 return GroupMemberResponse.model_validate(db_member)
             
@@ -394,24 +587,19 @@ class GroupRoutes:
             raise
         except Exception as e:
             db.rollback()
-            print(f"❌ Member addition failed with error: {str(e)}")
-            print(f"❌ Error type: {type(e)}")
-            import traceback
-            print(f"❌ Traceback: {traceback.format_exc()}")
             raise HTTPException(status_code=500, detail=f"Failed to add member: {str(e)}")
 
     async def confirm_member_join(self, group_id: UUID, user_id: UUID, tx_hash: str, db: Session = Depends(get_db)) -> GroupMemberConfirmationResponse:
         """Confirm member join after successful blockchain transaction"""
+        # This method remains the same but now works with the prepare/verify pattern
         # Verify group exists
         group = db.query(Group).filter(Group.id == group_id).first()
         if not group:
             raise HTTPException(status_code=404, detail="Group not found")
         
-       
         user = db.query(Profile).filter(Profile.user_id == user_id).first()
         if not user:
             raise HTTPException(status_code=404, detail="User not found")
-        
         
         wallet_address = getattr(user, 'wallet_address', None)
         if not wallet_address:
@@ -435,7 +623,6 @@ class GroupRoutes:
                     detail=f"Transaction verification failed: {verification_result['error']}"
                 )
             
-            
             existing_member = db.query(GroupMember).filter(
                 GroupMember.group_id == group_id,
                 GroupMember.user_id == user_id
@@ -446,7 +633,6 @@ class GroupRoutes:
                 setattr(existing_member, 'status', MemberStatus.active)
                 db_member = existing_member
             else:
-                
                 db_member = GroupMember(
                     group_id=group_id,
                     user_id=user_id,
@@ -480,8 +666,9 @@ class GroupRoutes:
             raise
         except Exception as e:
             db.rollback()
-            print(f" Member confirmation failed: {str(e)}")
             raise HTTPException(status_code=500, detail=f"Failed to confirm member join: {str(e)}")
+    
+    # Rest of the methods remain the same...
     def get_group_members(self, group_id: UUID, db: Session = Depends(get_db)) -> List[GroupMemberResponse]:
         """Get all members of a group"""
         members = db.query(GroupMember).filter(GroupMember.group_id == group_id).all()
@@ -627,14 +814,16 @@ class GroupRoutes:
         """Get blockchain statistics"""
         try:
             all_groups = await self.web3_service.get_blockchain_groups()
-            group_counter = self.web3_service.factory_contract.functions.groupCounter().call()
+            group_counter = self.web3_service.get_group_counter()
+            network_info = await self.web3_service.get_network_info()
             
             return {
                 "total_groups": len(all_groups),
                 "group_counter": group_counter,
                 "factory_address": self.web3_service.factory_address,
-                "network_connected": self.web3_service.w3.is_connected(),
-                "latest_block": self.web3_service.w3.eth.block_number
+                "network_connected": self.web3_service.is_connected(),
+                "latest_block": self.web3_service.get_latest_block_number(),
+                "network_info": network_info
             }
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Error fetching blockchain stats: {str(e)}")
@@ -654,8 +843,6 @@ class GroupRoutes:
             }
         except HTTPException:
             raise
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Error fetching creator groups: {str(e)}")
 
 # Create router instance
 group_routes = GroupRoutes()
