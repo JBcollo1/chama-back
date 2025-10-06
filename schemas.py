@@ -43,7 +43,7 @@ class GroupBase(BaseSchema):
 class GroupCreate(GroupBase):
     name: str = Field(..., min_length=1, max_length=255)
     max_members: int = Field(default=20, ge=3, le=100)
-    approval_required: Optional[bool] = True
+    approval_required: Optional[bool] = False
     wallet_address: Optional[str] = Field(None, pattern="^0x[a-fA-F0-9]{40}$")
     network_info: Optional[dict] = None
     created_by: UUID
