@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Body
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import func, desc, asc
 from typing import List, Optional, Union
@@ -25,7 +25,7 @@ class GroupRoutes:
     def _register_routes(self):
         """Register all group-related routes"""
         # Core group routes
-        self.router.add_api_route("/", self.create_group, methods=["POST"], response_model=GroupResponse)
+        self.router.add_api_route("/create-with-transaction", self.create_group_with_transaction, methods=["POST"], response_model=GroupResponse)
         self.router.add_api_route("/", self.get_groups, methods=["GET"], response_model=List[GroupResponse])
         self.router.add_api_route("/{group_id}", self.get_group, methods=["GET"], response_model=GroupWithDetails)
         self.router.add_api_route("/{group_id}", self.update_group, methods=["PUT"], response_model=GroupResponse)
@@ -39,7 +39,7 @@ class GroupRoutes:
         self.router.add_api_route("/{group_id}/members/{member_id}", self.remove_member, methods=["DELETE"])
         
         # NEW: Web3 transaction preparation endpoints
-        self.router.add_api_route("/{group_id}/create-transaction", self.prepare_group_creation_transaction, methods=["POST"])
+        self.router.add_api_route("/prepare-transaction", self.prepare_group_creation_transaction, methods=["POST"])
         self.router.add_api_route("/{group_id}/join-transaction", self.prepare_join_transaction, methods=["POST"])
         self.router.add_api_route("/{group_id}/contribute-transaction", self.prepare_contribute_transaction, methods=["POST"])
         
@@ -67,10 +67,16 @@ class GroupRoutes:
         self.router.add_api_route("/creator/{creator_address}/blockchain", self.get_creator_groups_blockchain, methods=["GET"])
     
     # NEW: Web3 Transaction Preparation Endpoints
-    async def prepare_group_creation_transaction(self, group_data: GroupCreate, db: Session = Depends(get_db)) -> dict:
-        """Prepare a group creation transaction for user to sign with their wallet"""
+    async def prepare_group_creation_transaction(
+        self, 
+        group_data: GroupCreate, 
+        db: Session = Depends(get_db)
+    ) -> dict:
+        """Phase 1: Prepare transaction data for frontend signing"""
         # Verify creator exists
-        creator = db.query(Profile).filter(Profile.user_id == group_data.created_by).first()
+        creator = db.query(Profile).filter(
+            Profile.user_id == group_data.created_by
+        ).first()
         if not creator:
             raise HTTPException(status_code=404, detail="Creator profile not found")
         
@@ -79,17 +85,29 @@ class GroupRoutes:
             raise HTTPException(status_code=400, detail="Wallet address is required")
         
         if not creator_address.startswith('0x') or len(creator_address) != 42:
-            raise HTTPException(status_code=400, detail="Invalid wallet address format")
+            raise HTTPException(
+                status_code=400, 
+                detail="Invalid wallet address format"
+            )
         
         try:
-            result = await self.web3_service.prepare_group_creation_transaction(group_data, creator_address)
+            result = await self.web3_service.prepare_group_creation_transaction(
+                group_data, 
+                creator_address
+            )
             if not result['success']:
                 raise HTTPException(status_code=500, detail=result['error'])
             
+            # Include group data for frontend reference
+            result['group_data'] = group_data.model_dump(mode='json')
             return result
             
         except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Failed to prepare transaction: {str(e)}")
+            raise HTTPException(
+                status_code=500, 
+                detail=f"Failed to prepare transaction: {str(e)}"
+            )
+
     
     async def prepare_join_transaction(self, group_id: UUID, user_address: str, db: Session = Depends(get_db)) -> dict:
         """Prepare a join group transaction for user to sign"""
@@ -305,59 +323,92 @@ class GroupRoutes:
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Failed to get gas estimates: {str(e)}")
     
-    async def create_group(self, group_data: GroupCreate, db: Session = Depends(get_db)) -> GroupResponse:
-        """Create a new group (database only - blockchain creation requires separate transaction signing)"""
+    async def create_group_with_transaction(
+        self,
+        group_data: GroupCreate = Body(...),
+        signed_tx_hash: str = Body(...),
+        db: Session = Depends(get_db)
+    ) -> GroupResponse:
+        """Phase 2: Create group after transaction is signed and submitted"""
         # Verify creator exists
-        creator = db.query(Profile).filter(Profile.user_id == group_data.created_by).first()
+        creator = db.query(Profile).filter(
+            Profile.user_id == group_data.created_by
+        ).first()
         if not creator:
             raise HTTPException(status_code=404, detail="Creator profile not found")
         
         try:
-            # Create group in database first (without blockchain info)
-            group_dict = group_data.model_dump()
+            # Wait for transaction confirmation
+            tx_result = await self.web3_service.wait_for_transaction_confirmation(
+                signed_tx_hash
+            )
             
-            # Remove fields that aren't in the database model
+            if not tx_result['success']:
+                raise HTTPException(
+                    status_code=400, 
+                    detail=f"Transaction failed: {tx_result.get('error')}"
+                )
+            
+            # Extract contract address from transaction receipt
+            contract_address = tx_result.get('contract_address')
+            if not contract_address:
+                raise HTTPException(
+                    status_code=500, 
+                    detail="Contract address not found in transaction receipt"
+                )
+            
+            # Create group in database with blockchain info
+            group_dict = group_data.model_dump()
             group_dict.pop('wallet_address', None)
             group_dict.pop('network_info', None)
             
-            # Set initial blockchain sync status
             group_dict.update({
-                'contract_address': None,  # Will be updated after blockchain transaction
-                'creation_tx_hash': None,
-                'creation_block_number': None,
-                'is_blockchain_synced': False,
-                'last_blockchain_sync': None
+                'contract_address': contract_address,
+                'creation_tx_hash': signed_tx_hash,
+                'creation_block_number': tx_result.get('block_number'),
+                'is_blockchain_synced': True,
+                'last_blockchain_sync': datetime.utcnow()
             })
             
             db_group = Group(**group_dict)
             db.add(db_group)
-            db.commit()
-            db.refresh(db_group)
+            db.flush()  # Get the group ID without committing
             
             # Add creator as admin
             admin_data = GroupAdminCreate(
-                group_id=getattr(db_group, 'id'),
+                group_id=db_group.id,
                 user_id=group_data.created_by
             )
             db_admin = GroupAdmin(**admin_data.model_dump())
             db.add(db_admin)
             
-            # Add creator as member (pending blockchain confirmation)
+            # Add creator as active member
             member_data = GroupMemberCreate(
-                group_id=getattr(db_group, 'id'),
+                group_id=db_group.id,
                 user_id=group_data.created_by,
                 wallet_address=group_data.wallet_address
             )
-            db_member = GroupMember(**member_data.model_dump(), status=MemberStatus.pending)
+            db_member = GroupMember(
+                **member_data.model_dump(), 
+                status=MemberStatus.active
+            )
             db.add(db_member)
             
+            # Commit everything together
             db.commit()
+            db.refresh(db_group)
             
             return GroupResponse.model_validate(db_group)
             
+        except HTTPException:
+            db.rollback()
+            raise
         except Exception as e:
             db.rollback()
-            raise HTTPException(status_code=500, detail=f"Group creation failed: {str(e)}")
+            raise HTTPException(
+                status_code=500, 
+                detail=f"Group creation failed: {str(e)}"
+            )
     
     def get_groups(
         self,

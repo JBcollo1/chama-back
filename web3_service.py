@@ -13,7 +13,7 @@ import logging
 
 from schemas import GroupCreate
 
-# Configure logging
+# Configure loggingCreate
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -198,6 +198,55 @@ class Web3Service:
             
         except Exception as e:
             logger.error(f"Group creation preparation failed: {e}")
+            return {'success': False, 'error': str(e)}
+    async def wait_for_transaction_confirmation(
+        self, 
+        tx_hash: str, 
+        timeout: int = 120
+    ) -> Dict[str, Any]:
+        """Wait for transaction confirmation and extract results"""
+        try:
+            if not tx_hash.startswith('0x') or len(tx_hash) != 66:
+                return {'success': False, 'error': 'Invalid transaction hash'}
+            
+            # Wait for transaction receipt
+            receipt = self.w3.eth.wait_for_transaction_receipt(
+                tx_hash, 
+                timeout=timeout
+            )
+            
+            # Check if transaction was successful
+            if receipt['status'] != 1:
+                return {
+                    'success': False, 
+                    'error': 'Transaction reverted on blockchain'
+                }
+            
+            # Parse logs to get contract address
+            contract_address = None
+            for log in receipt['logs']:
+                try:
+                    # Try to parse GroupCreated event
+                    parsed_log = self.factory_contract.events.GroupCreated().process_log(log)
+                    contract_address = parsed_log['args'].get('groupAddress')
+                    break
+                except:
+                    continue
+            
+            if not contract_address:
+                # Fallback: use contractAddress from receipt if available
+                contract_address = receipt.get('contractAddress')
+            
+            return {
+                'success': True,
+                'contract_address': contract_address,
+                'tx_hash': tx_hash,
+                'block_number': receipt['blockNumber'],
+                'gas_used': receipt['gasUsed']
+            }
+            
+        except Exception as e:
+            logger.error(f"Transaction confirmation failed: {e}")
             return {'success': False, 'error': str(e)}
 
     async def prepare_join_group_transaction(self, group_address: str, user_address: str) -> Dict[str, Any]:

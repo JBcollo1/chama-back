@@ -178,6 +178,7 @@ class GroupMember(Base):
     status = Column(Enum(MemberStatus), default=MemberStatus.pending)
     joined_at = Column(DateTime, default=datetime.utcnow)
     left_at = Column(DateTime, nullable=True)
+    wallet_address = Column(String, nullable = True)
     
     
     # Relationships

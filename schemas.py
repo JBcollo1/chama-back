@@ -95,7 +95,23 @@ class GroupMemberBase(BaseSchema):
     group_id: UUID
     user_id: UUID
     # wallet_address: Optional[str] = Field(None, pattern="^0x[a-fA-F0-9]{40}$")
-
+class GroupCreateWithTransaction(BaseModel):
+    # All GroupCreate fields
+    name: str
+    description: Optional[str] = None
+    contribution_amount: float
+    contribution_cycle: str
+    max_members: int
+    start_date: Optional[datetime] = None
+    end_date: Optional[datetime] = None
+    category: str
+    created_by: str
+    status: str
+    wallet_address: str
+    network_info: Optional[dict] = None
+    
+    # Transaction hash from signed transaction
+    signed_tx_hash: str
 class GroupMemberCreate(BaseSchema):
     group_id: UUID
     user_id: UUID
