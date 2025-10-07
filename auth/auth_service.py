@@ -10,7 +10,7 @@ from sqlalchemy.exc import IntegrityError
 from passlib.context import CryptContext
 import jwt
 from jwt.exceptions import InvalidTokenError
-
+import hashlib
 # Environment variables
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY")
@@ -29,6 +29,11 @@ supabase_admin: SyncClient = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_K
 # Password hashing
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
+
+
+
+def hash_token(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
 # OAuth provider types
 OAuthProvider = Literal['google', 'github']
 
@@ -128,7 +133,7 @@ class AuthService:
         token_record = RefreshToken(
             jti=jti,
             user_id=uuid.UUID(user_id),
-            token_hash=self.pwd_context.hash(refresh_token),  # Store hashed token
+            token_hash=hash_token(refresh_token),  # Store hashed token
             expires_at=expires_at,
             created_at=datetime.utcnow(),
             is_revoked=False
@@ -159,7 +164,7 @@ class AuthService:
                 return False
             
             # Verify token hash
-            return self.pwd_context.verify(refresh_token, cast(str, token_record.token_hash))
+            return hash_token(refresh_token) == token_record.token_hash
             
         except Exception:
             return False
@@ -281,7 +286,7 @@ class AuthService:
             # Create user in Supabase Auth
             auth_response = self.supabase.auth.sign_up({
                 "email": email,
-                "password": password,
+                "": password,
             })
             
             if auth_response.user is None:
