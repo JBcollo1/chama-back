@@ -142,6 +142,10 @@ class GroupMemberBlockchainInfo(BaseModel):
 
 class GroupMemberConfirmationResponse(GroupMemberResponse):
     blockchain_info: GroupMemberBlockchainInfo
+    
+class ConfirmMemberJoinRequest(BaseModel):
+    user_id: UUID
+    tx_hash: str
 
 # Group Admin schemas
 class GroupAdminBase(BaseSchema):

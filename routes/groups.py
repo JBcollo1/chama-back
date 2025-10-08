@@ -12,7 +12,7 @@ from schemas import (
     GroupCreate, GroupUpdate, GroupResponse, GroupWithDetails,
     GroupMemberCreate, GroupMemberUpdate, GroupMemberResponse,
     GroupAdminCreate, GroupAdminResponse, BlockchainSyncResponse, TransactionResponse,
-    GroupMemberConfirmationResponse, BlockchainInfo, GroupMemberBlockchainInfo
+    GroupMemberConfirmationResponse, BlockchainInfo, GroupMemberBlockchainInfo, ConfirmMemberJoinRequest
 )
 from web3_service import Web3Service
 
@@ -640,10 +640,15 @@ class GroupRoutes:
             db.rollback()
             raise HTTPException(status_code=500, detail=f"Failed to add member: {str(e)}")
 
-    async def confirm_member_join(self, group_id: UUID, user_id: UUID, tx_hash: str, db: Session = Depends(get_db)) -> GroupMemberConfirmationResponse:
-        """Confirm member join after successful blockchain transaction"""
-        # This method remains the same but now works with the prepare/verify pattern
-        # Verify group exists
+    async def confirm_member_join(
+        self,
+        group_id: UUID,
+        body: ConfirmMemberJoinRequest,
+        db: Session = Depends(get_db)
+    ) -> GroupMemberConfirmationResponse:
+        """Confirm member join after successful blockchain transaction."""
+        user_id = body.user_id
+        tx_hash = body.tx_hash
         group = db.query(Group).filter(Group.id == group_id).first()
         if not group:
             raise HTTPException(status_code=404, detail="Group not found")
