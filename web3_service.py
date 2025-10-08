@@ -437,28 +437,246 @@ class Web3Service:
 
     async def verify_join_transaction(self, tx_hash: str, group_address: str, user_address: str) -> Dict[str, Any]:
         """Verify that a join transaction was successful"""
+        logger.info(f"Starting join transaction verification - TX: {tx_hash}, Group: {group_address}, User: {user_address}")
+        
         try:
+            # Verify basic transaction
+            logger.info("Calling verify_user_transaction...")
             verification_result = await self.verify_user_transaction(
                 tx_hash, 
                 user_address, 
                 group_address
             )
             
+            logger.info(f"verify_user_transaction result: {verification_result}")
+            
             if not verification_result['success']:
+                logger.error(f"Transaction verification failed: {verification_result.get('error')}")
                 return verification_result
             
             # Additional verification: check if user is now a member
-            group_contract = self._get_group_contract(group_address)
-            is_member = group_contract.functions.isMember(to_checksum_address(user_address)).call()
-            
-            if not is_member:
-                return {'success': False, 'error': 'User is not registered as a member after transaction'}
+            logger.info(f"Checking if user is member on contract...")
+            try:
+                group_contract = self._get_group_contract(group_address)
+                checksum_address = to_checksum_address(user_address)
+                logger.info(f"Calling isMember for address: {checksum_address}")
                 
+                is_member = group_contract.functions.isMember(checksum_address).call()
+                logger.info(f"isMember result: {is_member}")
+                
+                if not is_member:
+                    logger.error(f"User {user_address} is not registered as member after transaction")
+                    return {'success': False, 'error': 'User is not registered as a member after transaction'}
+            except Exception as contract_error:
+                logger.error(f"Error checking membership on contract: {str(contract_error)}", exc_info=True)
+                return {'success': False, 'error': f'Failed to verify membership: {str(contract_error)}'}
+            
+            logger.info("Join transaction verification successful")
             return verification_result
             
         except Exception as e:
-            logger.error(f"Join transaction verification failed: {e}")
+            logger.error(f"Join transaction verification failed with exception: {str(e)}", exc_info=True)
             return {'success': False, 'error': str(e)}
+
+
+    async def verify_user_transaction(self, tx_hash: str, user_address: str, contract_address: str) -> Dict[str, Any]:
+        """Verify a user transaction on the blockchain"""
+        logger.info(f"Verifying user transaction - TX: {tx_hash}, User: {user_address}, Contract: {contract_address}")
+        
+        try:
+            # Get transaction receipt
+            logger.info(f"Fetching transaction receipt for {tx_hash}...")
+            tx_receipt = self.w3.eth.get_transaction_receipt(tx_hash)
+            
+            if not tx_receipt:
+                logger.error(f"Transaction receipt not found for {tx_hash}")
+                return {'success': False, 'error': 'Transaction not found'}
+            
+            logger.info(f"Transaction receipt status: {tx_receipt['status']}")
+            logger.info(f"Transaction from: {tx_receipt.get('from')}, to: {tx_receipt.get('to')}")
+            logger.info(f"Block number: {tx_receipt['blockNumber']}, Gas used: {tx_receipt['gasUsed']}")
+            
+            # Check transaction status
+            if tx_receipt['status'] != 1:
+                logger.error(f"Transaction {tx_hash} failed on blockchain (status: {tx_receipt['status']})")
+                
+                # Try to get the revert reason
+                revert_reason = await self._get_revert_reason(tx_hash, tx_receipt)
+                
+                error_message = f'Transaction failed on blockchain. {revert_reason}'
+                logger.error(error_message)
+                
+                return {
+                    'success': False, 
+                    'error': error_message,
+                    'status': tx_receipt['status'],
+                    'gas_used': tx_receipt['gasUsed']
+                }
+            
+            # Verify sender
+            tx_from = tx_receipt.get('from', '').lower()
+            expected_from = user_address.lower()
+            
+            if tx_from != expected_from:
+                logger.error(f"Transaction sender mismatch - Expected: {expected_from}, Got: {tx_from}")
+                return {'success': False, 'error': f'Transaction not from user wallet (expected: {expected_from}, got: {tx_from})'}
+            
+            # Verify recipient (contract address)
+            tx_to = tx_receipt.get('to', '').lower()
+            expected_to = contract_address.lower()
+            
+            if tx_to != expected_to:
+                logger.error(f"Transaction recipient mismatch - Expected: {expected_to}, Got: {tx_to}")
+                return {'success': False, 'error': f'Transaction not to group contract (expected: {expected_to}, got: {tx_to})'}
+            
+            logger.info("Transaction verification successful")
+            
+            return {
+                'success': True,
+                'tx_hash': tx_hash,
+                'block_number': tx_receipt['blockNumber'],
+                'gas_used': tx_receipt['gasUsed']
+            }
+            
+        except Exception as e:
+            logger.error(f"Error verifying transaction {tx_hash}: {str(e)}", exc_info=True)
+            return {'success': False, 'error': str(e)}
+
+
+    async def _get_revert_reason(self, tx_hash: str, tx_receipt: dict) -> str:
+        """
+        Try to extract the revert reason from a failed transaction
+        """
+        try:
+            # Get the original transaction
+            tx = self.w3.eth.get_transaction(tx_hash)
+            
+            logger.info(f"Attempting to decode revert reason for tx {tx_hash}")
+            logger.info(f"Transaction input: {tx['input'][:66]}...")  # First 66 chars (0x + 32 bytes)
+            
+            # Try to replay the transaction to get the revert reason
+            try:
+                # Build the transaction dict for eth_call
+                call_params = {
+                    'from': tx['from'],
+                    'to': tx['to'],
+                    'data': tx['input'],
+                    'value': tx.get('value', 0),
+                    'gas': tx.get('gas', 0)
+                }
+                
+                # Try to call at the block before the transaction was mined
+                block_number = tx_receipt['blockNumber'] - 1
+                
+                logger.info(f"Replaying transaction at block {block_number}")
+                self.w3.eth.call(call_params, block_number)
+                
+                # If we get here, the call succeeded (shouldn't happen for a failed tx)
+                return "Reason: Unknown (call succeeded in replay)"
+                
+            except Exception as call_error:
+                error_str = str(call_error)
+                logger.info(f"Call error (this contains revert reason): {error_str}")
+                
+                # Parse common revert reasons
+                if "execution reverted" in error_str.lower():
+                    # Try to extract the revert message
+                    if ":" in error_str:
+                        reason = error_str.split(":", 1)[1].strip()
+                        return f"Reason: {reason}"
+                    return f"Reason: {error_str}"
+                
+                # Check for specific error patterns
+                if "already a member" in error_str.lower():
+                    return "Reason: User is already a member of this group"
+                elif "max members" in error_str.lower():
+                    return "Reason: Group has reached maximum member capacity"
+                elif "not approved" in error_str.lower():
+                    return "Reason: Member join requires approval"
+                elif "insufficient" in error_str.lower():
+                    return "Reason: Insufficient funds or allowance"
+                
+                return f"Reason: {error_str}"
+                
+        except Exception as e:
+            logger.warning(f"Could not extract revert reason: {str(e)}")
+            return "Reason: Could not determine (check smart contract logs)"
+
+
+    async def diagnose_join_failure(self, group_address: str, user_address: str) -> Dict[str, Any]:
+        """
+        Diagnose why a user might not be able to join a group
+        Useful for debugging before attempting the transaction
+        """
+        try:
+            logger.info(f"Diagnosing join failure for user {user_address} joining group {group_address}")
+            
+            group_contract = self._get_group_contract(group_address)
+            checksum_user = to_checksum_address(user_address)
+            
+            # Check various conditions
+            diagnostics = {}
+            
+            # 1. Check if already a member
+            try:
+                is_member = group_contract.functions.isMember(checksum_user).call()
+                diagnostics['is_already_member'] = is_member
+                logger.info(f"Is already member: {is_member}")
+            except Exception as e:
+                diagnostics['is_already_member'] = f"Error: {str(e)}"
+            
+            # 2. Check member count vs max members
+            try:
+                member_count = group_contract.functions.getMemberCount().call()
+                max_members = group_contract.functions.maxMembers().call()
+                diagnostics['member_count'] = member_count
+                diagnostics['max_members'] = max_members
+                diagnostics['is_full'] = member_count >= max_members
+                logger.info(f"Members: {member_count}/{max_members}, Full: {member_count >= max_members}")
+            except Exception as e:
+                diagnostics['member_count_check'] = f"Error: {str(e)}"
+            
+            # 3. Check if group is active
+            try:
+                is_active = group_contract.functions.isActive().call()
+                diagnostics['is_active'] = is_active
+                logger.info(f"Group is active: {is_active}")
+            except Exception as e:
+                diagnostics['is_active'] = f"Error: {str(e)}"
+            
+            # 4. Check approval requirements
+            try:
+                approval_required = group_contract.functions.approvalRequired().call()
+                diagnostics['approval_required'] = approval_required
+                logger.info(f"Approval required: {approval_required}")
+            except Exception as e:
+                diagnostics['approval_required'] = f"Error: {str(e)}"
+            
+            # 5. Check contribution amount
+            try:
+                contribution_amount = group_contract.functions.contributionAmount().call()
+                diagnostics['contribution_amount'] = str(contribution_amount)
+                logger.info(f"Contribution amount: {contribution_amount}")
+                
+                # Check user's balance
+                balance = self.w3.eth.get_balance(checksum_user)
+                diagnostics['user_balance'] = str(balance)
+                diagnostics['has_sufficient_balance'] = balance >= contribution_amount
+                logger.info(f"User balance: {balance}, Sufficient: {balance >= contribution_amount}")
+            except Exception as e:
+                diagnostics['contribution_check'] = f"Error: {str(e)}"
+            
+            return {
+                'success': True,
+                'diagnostics': diagnostics
+            }
+            
+        except Exception as e:
+            logger.error(f"Error during diagnosis: {str(e)}", exc_info=True)
+            return {
+                'success': False,
+                'error': str(e)
+            }
 
     async def verify_contribution_transaction(self, tx_hash: str, group_address: str, user_address: str, expected_amount: int = None) -> Dict[str, Any]:
         """Verify that a contribution transaction was successful"""

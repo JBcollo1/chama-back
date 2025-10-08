@@ -15,6 +15,9 @@ from schemas import (
     GroupMemberConfirmationResponse, BlockchainInfo, GroupMemberBlockchainInfo, ConfirmMemberJoinRequest
 )
 from web3_service import Web3Service
+import logging
+
+logger = logging.getLogger(__name__)
 
 class GroupRoutes:
     def __init__(self):
@@ -649,46 +652,67 @@ class GroupRoutes:
         """Confirm member join after successful blockchain transaction."""
         user_id = body.user_id
         tx_hash = body.tx_hash
+        
+        logger.info(f"Starting member join confirmation - Group: {group_id}, User: {user_id}, TX: {tx_hash}")
+        
+        # Fetch group
         group = db.query(Group).filter(Group.id == group_id).first()
         if not group:
+            logger.error(f"Group not found: {group_id}")
             raise HTTPException(status_code=404, detail="Group not found")
         
+        logger.info(f"Group found - Contract: {getattr(group, 'contract_address', None)}")
+        
+        # Fetch user
         user = db.query(Profile).filter(Profile.user_id == user_id).first()
         if not user:
+            logger.error(f"User not found: {user_id}")
             raise HTTPException(status_code=404, detail="User not found")
         
         wallet_address = getattr(user, 'wallet_address', None)
         if not wallet_address:
+            logger.error(f"User {user_id} has no wallet address")
             raise HTTPException(status_code=400, detail="User wallet address not found")
+        
+        logger.info(f"User wallet address: {wallet_address}")
         
         try:
             # Verify blockchain transaction
             contract_address = getattr(group, 'contract_address', None)
             if not contract_address:
+                logger.error(f"Group {group_id} has no contract address")
                 raise HTTPException(status_code=400, detail="Group does not have a blockchain contract")
-                
+            
+            logger.info(f"Verifying transaction on blockchain - TX: {tx_hash}, Contract: {contract_address}, Wallet: {wallet_address}")
+            
             verification_result = await self.web3_service.verify_join_transaction(
                 tx_hash, 
                 contract_address, 
                 wallet_address
             )
             
+            logger.info(f"Verification result: {verification_result}")
+            
             if not verification_result['success']:
+                error_msg = verification_result.get('error', 'Unknown error')
+                logger.error(f"Transaction verification failed: {error_msg}")
                 raise HTTPException(
                     status_code=400, 
-                    detail=f"Transaction verification failed: {verification_result['error']}"
+                    detail=f"Transaction verification failed: {error_msg}"
                 )
             
+            # Check for existing member
             existing_member = db.query(GroupMember).filter(
                 GroupMember.group_id == group_id,
                 GroupMember.user_id == user_id
             ).first()
             
             if existing_member:
-                # Update existing member status
+                logger.info(f"Updating existing member status for user {user_id}")
                 setattr(existing_member, 'status', MemberStatus.active)
                 db_member = existing_member
             else:
+                logger.info(f"Creating new member record for user {user_id}")
                 db_member = GroupMember(
                     group_id=group_id,
                     user_id=user_id,
@@ -698,6 +722,8 @@ class GroupRoutes:
             
             db.commit()
             db.refresh(db_member)
+            
+            logger.info(f"Member record saved successfully - Member ID: {db_member.id}")
             
             # Create blockchain info
             blockchain_info = GroupMemberBlockchainInfo(
@@ -715,14 +741,19 @@ class GroupRoutes:
                 blockchain_info=blockchain_info
             )
             
+            logger.info(f"Member join confirmed successfully - User: {user_id}, Group: {group_id}")
             return response
             
         except HTTPException:
             db.rollback()
+            logger.error(f"HTTPException during member join confirmation", exc_info=True)
             raise
         except Exception as e:
             db.rollback()
+            logger.error(f"Unexpected error during member join confirmation: {str(e)}", exc_info=True)
             raise HTTPException(status_code=500, detail=f"Failed to confirm member join: {str(e)}")
+
+
     
     # Rest of the methods remain the same...
     def get_group_members(self, group_id: UUID, db: Session = Depends(get_db)) -> List[GroupMemberResponse]:
