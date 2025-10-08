@@ -451,9 +451,18 @@ class Web3Service:
             logger.info(f"verify_user_transaction result: {verification_result}")
             
             if not verification_result['success']:
-                logger.error(f"Transaction verification failed: {verification_result.get('error')}")
+                error = verification_result.get('error', '').lower()
+                if 'already_joined' in error or 'already a member' in error:
+                    logger.warning(f"User {user_address} already a member on-chain")
+                    return {
+                        'success': False,
+                        'reason': 'already_joined',
+                        'tx_hash': tx_hash,
+                        'block_number': verification_result.get('block_number'),
+                        'gas_used': verification_result.get('gas_used'),
+                    }
                 return verification_result
-            
+
             # Additional verification: check if user is now a member
             logger.info(f"Checking if user is member on contract...")
             try:
@@ -588,7 +597,7 @@ class Web3Service:
                 
                 # Check for specific error patterns
                 if "already a member" in error_str.lower():
-                    return "Reason: User is already a member of this group"
+                    return "Reason: User is already a member of this group |already_joined"
                 elif "max members" in error_str.lower():
                     return "Reason: Group has reached maximum member capacity"
                 elif "not approved" in error_str.lower():

@@ -694,12 +694,52 @@ class GroupRoutes:
             logger.info(f"Verification result: {verification_result}")
             
             if not verification_result['success']:
+                reason = verification_result.get('reason')
                 error_msg = verification_result.get('error', 'Unknown error')
+
+                # ✅ If blockchain says user is already a member, sync DB anyway
+                if reason == 'already_joined' or 'already a member' in error_msg.lower():
+                    logger.warning(f"User {user_id} already a member on-chain. Syncing DB state...")
+                    
+                    existing_member = db.query(GroupMember).filter(
+                        GroupMember.group_id == group_id,
+                        GroupMember.user_id == user_id
+                    ).first()
+
+                    if not existing_member:
+                        db_member = GroupMember(
+                            group_id=group_id,
+                            user_id=user_id,
+                            status=MemberStatus.active
+                        )
+                        db.add(db_member)
+                    else:
+                        setattr(existing_member, 'status', MemberStatus.active)
+                        db_member = existing_member
+
+                    db.commit()
+                    db.refresh(db_member)
+
+                    blockchain_info = GroupMemberBlockchainInfo(
+                        wallet_address=wallet_address,
+                        tx_hash=tx_hash,
+                        block_number=verification_result.get('block_number'),
+                        gas_used=verification_result.get('gas_used'),
+                        joined_on_blockchain=True
+                    )
+
+                    member_response = GroupMemberResponse.model_validate(db_member)
+                    response = GroupMemberConfirmationResponse(
+                        **member_response.model_dump(),
+                        blockchain_info=blockchain_info
+                    )
+
+                    return response
                 logger.error(f"Transaction verification failed: {error_msg}")
                 raise HTTPException(
-                    status_code=400, 
+                    status_code=400,
                     detail=f"Transaction verification failed: {error_msg}"
-                )
+                ) 
             
             # Check for existing member
             existing_member = db.query(GroupMember).filter(
