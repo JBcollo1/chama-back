@@ -16,7 +16,7 @@ from routes.groups import router as groups_router
 from routes.contributions import router as contributions_router
 from auth.auth_routes import router as auth_router
 
-# Configure logging
+# Configure logging  
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 

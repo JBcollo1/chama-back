@@ -97,17 +97,7 @@ class UserOAuthToken(Base):
         UniqueConstraint("user_id", "provider", name="uix_user_provider"),
         Index("ix_user_provider", "user_id", "provider"),
     )
-# class UserAccountLink(Base):
-#     """Links Supabase auth.users.id to our profiles.user_id for account consolidation"""
-#     __tablename__ = "user_account_links"
-    
-#     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-#     supabase_user_id = Column(UUID(as_uuid=True), unique=True, nullable=False, index=True)
-#     profile_user_id = Column(UUID(as_uuid=True), ForeignKey('profiles.user_id'), nullable=False, index=True)
-#     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
-    
-  
-#     profile = relationship("Profile", back_populates="account_links")
+
 
 class Profile(Base):
     __tablename__ = "profiles"
