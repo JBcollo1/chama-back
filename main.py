@@ -15,6 +15,10 @@ from models import *  # Import all models to ensure they're registered
 from routes.groups import router as groups_router
 from routes.contributions import router as contributions_router
 from auth.auth_routes import router as auth_router
+import socket
+
+socket.setdefaulttimeout(30)
+socket.has_ipv6 = False
 
 # Configure logging  
 logging.basicConfig(level=logging.INFO)

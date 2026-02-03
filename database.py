@@ -4,6 +4,10 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 import os
 from dotenv import load_dotenv
+import socket
+
+socket.setdefaulttimeout(30)
+socket.has_ipv6 = False
 
 load_dotenv()
 
