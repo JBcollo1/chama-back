@@ -105,6 +105,7 @@ else:
         "http://localhost:3000",
         "http://localhost:8080",
         "http://127.0.0.1:3000",
+        "http://172.17.129.34:8080",
         "http://localhost:5173",  # Vite default
         "https://chama3.netlify.app",  # Allow Netlify in dev for testing
     ]
