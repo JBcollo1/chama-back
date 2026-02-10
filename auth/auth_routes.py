@@ -238,9 +238,7 @@ class AuthRoutes:
             )
         
         try:
-            # FIX: Call the method with correct parameters
-            # Instead of: user_data = self.auth_service.get_current_user(access_token, db)
-            # Use a helper method that takes just the token:
+          
             user_data = self.auth_service.get_current_user_from_token(access_token, db)
             
             profile = user_data["profile"]
