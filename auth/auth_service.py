@@ -198,7 +198,7 @@ class AuthService:
         
         cookie_settings = {
             "httponly": True,
-            "secure": False,  
+            "secure": True,  
             "samesite": "none",
             "max_age": 2592000,  # 30 days
             "path": "/",
