@@ -194,12 +194,13 @@ class AuthService:
         print(f"=== COOKIE DEBUG ===")
         print(f"Environment: {'production' if is_prod else 'development'}")
         print(f"Secure: {is_prod}")
-        print(f"SameSite: {'none'}")
+        print(f"SameSite: {'lax'}")
         
         cookie_settings = {
             "httponly": True,
-            "secure": True,  
-            "samesite": "none",
+            "secure": False,  
+            "samesite": "lax",
+            "domain":"localhost",
             "max_age": 2592000,  # 30 days
             "path": "/",
    

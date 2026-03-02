@@ -223,7 +223,11 @@ class AuthRoutes:
         print(f"Cookies: {dict(request.cookies)}")
         print(f"Credentials: {credentials.credentials if credentials else 'None'}")
         
-        access_token = request.cookies.get("access_token")
+        # access_token = request.cookies.get("access_token")
+        access_token = auth_service.get_token_from_cookie_or_header(request, credentials)
+        
+        print(access_token)
+
 
         # Fall back to Authorization header (for API clients)
         if not access_token and credentials:
