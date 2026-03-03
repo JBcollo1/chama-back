@@ -52,7 +52,39 @@ class Web3Service:
         
         # Verify connection on initialization
         self._verify_connection()
-    
+    def _parse_web3_error(self, error: Exception) -> str:
+        """Extract human-readable message from Web3/RPC errors"""
+        err_str = str(error)
+        
+        # Contract revert with reason string
+        if 'execution reverted' in err_str:
+            match = re.search(r"execution reverted: (.+?)(?:'|\"|}|$)", err_str)
+            if match:
+                return f"Contract rejected transaction: {match.group(1)}"
+            return "Contract rejected transaction (no reason given)"
+        
+        # Insufficient funds
+        if 'insufficient funds' in err_str.lower():
+            return "Insufficient funds to cover gas cost"
+        
+        # Gas too low
+        if 'intrinsic gas too low' in err_str.lower():
+            return "Gas limit too low for this transaction"
+        
+        # Nonce issues
+        if 'nonce too low' in err_str.lower():
+            return "Transaction nonce conflict — try again"
+        if 'nonce too high' in err_str.lower():
+            return "Transaction nonce too high — wallet may be out of sync"
+        
+        # Gas price too low
+        if 'gas price too low' in err_str.lower() or 'underpriced' in err_str.lower():
+            return "Gas price too low — network is congested"
+        
+        return f"Blockchain error: {err_str}"
+
+
+
     def _initialize_admin_account(self):
         """Initialize admin account from private key (optional, only for admin operations)"""
         self.private_key = os.getenv("ADMIN_PRIVATE_KEY")
@@ -199,55 +231,72 @@ class Web3Service:
         except Exception as e:
             logger.error(f"Group creation preparation failed: {e}")
             return {'success': False, 'error': str(e)}
-    async def wait_for_transaction_confirmation(
-        self, 
-        tx_hash: str, 
-        timeout: int = 120
-    ) -> Dict[str, Any]:
-        """Wait for transaction confirmation and extract results"""
-        try:
-            if not tx_hash.startswith('0x') or len(tx_hash) != 66:
-                return {'success': False, 'error': 'Invalid transaction hash'}
-            
-            # Wait for transaction receipt
-            receipt = self.w3.eth.wait_for_transaction_receipt(
-                tx_hash, 
-                timeout=timeout
-            )
-            
-            # Check if transaction was successful
-            if receipt['status'] != 1:
-                return {
-                    'success': False, 
-                    'error': 'Transaction reverted on blockchain'
-                }
-            
-            # Parse logs to get contract address
-            contract_address = None
-            for log in receipt['logs']:
+        async def wait_for_transaction_confirmation(
+            self,
+            tx_hash: str,
+            timeout: int = 120
+        ) -> Dict[str, Any]:
+            try:
+                if not tx_hash.startswith('0x') or len(tx_hash) != 66:
+                    return {'success': False, 'error': 'Invalid transaction hash'}
+
+                # ✅ Verify tx was actually broadcast before polling
                 try:
-                    # Try to parse GroupCreated event
-                    parsed_log = self.factory_contract.events.GroupCreated().process_log(log)
-                    contract_address = parsed_log['args'].get('groupAddress')
-                    break
-                except:
-                    continue
-            
-            if not contract_address:
-                # Fallback: use contractAddress from receipt if available
-                contract_address = receipt.get('contractAddress')
-            
-            return {
-                'success': True,
-                'contract_address': contract_address,
-                'tx_hash': tx_hash,
-                'block_number': receipt['blockNumber'],
-                'gas_used': receipt['gasUsed']
-            }
-            
-        except Exception as e:
-            logger.error(f"Transaction confirmation failed: {e}")
-            return {'success': False, 'error': str(e)}
+                    tx = await asyncio.get_event_loop().run_in_executor(
+                        None, lambda: self.w3.eth.get_transaction(tx_hash)
+                    )
+                    if tx is None:
+                        return {
+                            'success': False,
+                            'error': 'Transaction not found on network — it may not have been broadcast'
+                        }
+                except Exception as e:
+                    return {'success': False, 'error': f'Could not verify transaction: {e}'}
+
+                # ✅ Non-blocking wait
+                try:
+                    receipt = await asyncio.get_event_loop().run_in_executor(
+                        None,
+                        lambda: self.w3.eth.wait_for_transaction_receipt(tx_hash, timeout=timeout)
+                    )
+                except TimeExhausted:
+                    return {
+                        'success': False,
+                        'error': f'Transaction not confirmed within {timeout}s — still pending'
+                    }
+
+                if receipt['status'] != 1:
+                    return {'success': False, 'error': 'Transaction reverted on blockchain'}
+
+                # Parse GroupCreated event for contract address
+                contract_address = None
+                for log in receipt['logs']:
+                    try:
+                        parsed_log = self.factory_contract.events.GroupCreated().process_log(log)
+                        contract_address = parsed_log['args'].get('groupAddress')
+                        break
+                    except Exception as log_err:
+                        logger.debug(f"Skipping log: {log_err}")
+                        continue
+
+                if not contract_address:
+                    contract_address = receipt.get('contractAddress')
+
+                if not contract_address:
+                    logger.error(f"No contract address in receipt: {receipt}")
+                    return {'success': False, 'error': 'Contract address missing from receipt'}
+
+                return {
+                    'success': True,
+                    'contract_address': contract_address,
+                    'tx_hash': tx_hash,
+                    'block_number': receipt['blockNumber'],
+                    'gas_used': receipt['gasUsed']
+                }
+
+            except Exception as e:
+                logger.error(f"Transaction confirmation failed: {e}", exc_info=True)
+                return {'success': False, 'error': str(e)}
 
     async def prepare_join_group_transaction(self, group_address: str, user_address: str) -> Dict[str, Any]:
         """Prepare a join group transaction for user to sign"""
