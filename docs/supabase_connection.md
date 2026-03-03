@@ -10,6 +10,7 @@
 - WSL2 has its own virtualized network interface.
 - By default, `localhost` may resolve to an IPv6 address.
 - Supabase/Postgres client sometimes fails to connect over IPv6 in WSL.
+  
 ![WSL Connection Error](./img/er2.png)
 **Solution 1 (Force IPv4)-Failed**:
 - Changed connection string:
@@ -21,5 +22,7 @@
 - Use a pool to reduce frequent reconnects:
 - Supabase allowed the pooling of connections
 - Result: Stable connection
+  
 ![Supabase Connection pooling](./img/er1.png)
+
 
