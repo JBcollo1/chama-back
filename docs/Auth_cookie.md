@@ -17,7 +17,7 @@ Our setup ran two servers locally:
 
 After a successful OAuth token exchange, the backend set an `access_token` cookie. Every subsequent call to `/api/v1/auth/me` returned **401 Unauthorized** — the backend kept reporting that no `access_token` cookie was present, even though it was visible in the browser.
 
-(./img/er3.png)
+![Network Tab Error](./img/er3.png)
 
 The backend logs confirmed it clearly:
 
