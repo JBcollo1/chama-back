@@ -413,6 +413,7 @@ class GroupRoutes:
                 detail=f"Group creation failed: {str(e)}"
             )
     
+    
     def get_groups(
         self,
         db: Session = Depends(get_db),

@@ -143,9 +143,7 @@ class Web3Service:
             return self.w3.to_wei(self.default_gas_price, 'gwei')
     
     def _estimate_gas_for_user(self, transaction_data: dict, from_address: str) -> int:
-        """Estimate gas for user transaction with buffer"""
         try:
-            # Create a transaction dict for estimation
             tx_for_estimation = {
                 'from': to_checksum_address(from_address),
                 'to': transaction_data.get('to'),
@@ -154,7 +152,17 @@ class Web3Service:
             }
             
             estimated_gas = self.w3.eth.estimate_gas(tx_for_estimation)
-            # Add 20% buffer
+            logger.info(f"✅ Gas estimated successfully: {estimated_gas}")
+
+            # ❌ If estimate is suspiciously high, call eth_call to get revert reason
+            if estimated_gas > 500000:
+                logger.warning(f"⚠️ Suspiciously high gas estimate: {estimated_gas}")
+                try:
+                    self.w3.eth.call(tx_for_estimation)
+                    logger.info("eth_call succeeded — no revert")
+                except Exception as call_err:
+                    logger.error(f"❌ eth_call revert reason: {call_err}")
+
             return int(estimated_gas * 1.2)
         except Exception as e:
             logger.warning(f"Gas estimation failed: {e}, using default")
@@ -180,28 +188,43 @@ class Web3Service:
             now = int(datetime.now().timestamp())
 
             config = (
-                group_data.name,
-                self.w3.to_wei(float(group_data.contribution_amount), 'ether'),
-                group_data.max_members,
-                int(group_data.start_date.timestamp()) if group_data.start_date else now + 3600,
-                int(group_data.end_date.timestamp()) if group_data.end_date else now + 30 * 24 * 60 * 60,
-                getattr(group_data, 'contribution_frequency', 'weekly') or "weekly",
-                0,        # punishment mode
-                getattr(group_data, 'approval_required', False),
-                False,    # emergency withdraw allowed
-                creator_checksum,
-                '0x0000000000000000000000000000000000000000',  # native token
-                86400,    # grace period (1 day)
-                172800    # contribution window (2 days)
-            )
-
+                    group_data.name,
+                    self.w3.to_wei(float(group_data.contribution_amount), 'ether'),
+                    group_data.max_members,
+                    int(group_data.start_date.timestamp()) if group_data.start_date else now + 3600,
+                    int(group_data.end_date.timestamp()) if group_data.end_date else now + 30 * 24 * 60 * 60,
+                    # ✅ Use whichever field exists
+                    getattr(group_data, 'contribution_frequency', None) 
+                    or getattr(group_data, 'contribution_cycle', None) 
+                    or "weekly",
+                    0,
+                    getattr(group_data, 'approval_required', False),
+                    False,
+                    creator_checksum,
+                    '0x0000000000000000000000000000000000000000',
+                    86400,
+                    172800
+                )
+            # ✅ Let frontend provide the nonce — it knows the actual account
+            # Backend nonce is unreliable if frontend account differs from what we query
             nonce = self.w3.eth.get_transaction_count(creator_checksum)
+            logger.info(f"Nonce for {creator_checksum}: {nonce}")
+            logger.info(f"Config tuple: {config}")
 
-            # ✅ EIP-1559 fee calculation — Core Wallet always signs as type 0x02
-            latest_block = self.w3.eth.get_block('latest')
-            base_fee = latest_block.get('baseFeePerGas', self.w3.to_wei(25, 'gwei'))
-            max_priority_fee = self.w3.to_wei(2, 'gwei')   # tip to validator
-            max_fee = (base_fee * 2) + max_priority_fee     # covers base fee spikes
+            # ✅ EIP-1559 fee calculation with safe fallback
+            FUJI_MIN_BASE_FEE = self.w3.to_wei(25, 'gwei')  # Avalanche Fuji minimum
+            try:
+                latest_block = self.w3.eth.get_block('latest')
+                base_fee = latest_block.get('baseFeePerGas') or FUJI_MIN_BASE_FEE
+                if base_fee < FUJI_MIN_BASE_FEE:
+                    logger.warning(f"baseFeePerGas {base_fee} below Fuji minimum, using {FUJI_MIN_BASE_FEE}")
+                    base_fee = FUJI_MIN_BASE_FEE
+            except Exception as e:
+                logger.warning(f"Could not fetch latest block: {e}, using minimum base fee")
+                base_fee = FUJI_MIN_BASE_FEE
+
+            max_priority_fee = self.w3.to_wei(2, 'gwei')
+            max_fee = (base_fee * 2) + max_priority_fee
 
             logger.info(
                 f"EIP-1559 fees — base: {base_fee / 1e9:.2f} Gwei, "
@@ -212,7 +235,7 @@ class Web3Service:
             # ✅ Build as EIP-1559 (type 2) — matches what Core Wallet will sign
             transaction_data = self.factory_contract.functions.createGroup(config).build_transaction({
                 'from': creator_checksum,
-                'nonce': nonce,
+                # 'nonce': nonce,
                 'maxFeePerGas': max_fee,
                 'maxPriorityFeePerGas': max_priority_fee,
                 'gas': self.default_gas_limit,
@@ -252,6 +275,8 @@ class Web3Service:
             logger.error(f"Group creation preparation failed: {e}", exc_info=True)
             return {'success': False, 'error': str(e)}
 
+
+   
 
     async def wait_for_transaction_confirmation(
         self,
@@ -319,7 +344,6 @@ class Web3Service:
         except Exception as e:
             logger.error(f"Transaction confirmation failed: {e}", exc_info=True)
             return {'success': False, 'error': str(e)}
-
     async def prepare_join_group_transaction(self, group_address: str, user_address: str) -> Dict[str, Any]:
         """Prepare a join group transaction for user to sign"""
         try:
