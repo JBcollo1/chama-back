@@ -173,15 +173,12 @@ class Web3Service:
     async def prepare_group_creation_transaction(self, group_data: GroupCreate, creator_address: str) -> Dict[str, Any]:
         """Prepare a group creation transaction for user to sign"""
         try:
-            # Validate creator address
             if not self.validate_address(creator_address):
                 return {'success': False, 'error': 'Invalid creator address'}
-            
+
             creator_checksum = to_checksum_address(creator_address)
-            
-            # Convert group data to blockchain format
             now = int(datetime.now().timestamp())
-            
+
             config = (
                 group_data.name,
                 self.w3.to_wei(float(group_data.contribution_amount), 'ether'),
@@ -189,114 +186,139 @@ class Web3Service:
                 int(group_data.start_date.timestamp()) if group_data.start_date else now + 3600,
                 int(group_data.end_date.timestamp()) if group_data.end_date else now + 30 * 24 * 60 * 60,
                 getattr(group_data, 'contribution_frequency', 'weekly') or "weekly",
-                0,  # punishment mode
+                0,        # punishment mode
                 getattr(group_data, 'approval_required', False),
-                False,  # emergency withdraw allowed
+                False,    # emergency withdraw allowed
                 creator_checksum,
                 '0x0000000000000000000000000000000000000000',  # native token
-                86400,  # grace period (1 day)
-                172800  # contribution window (2 days)
+                86400,    # grace period (1 day)
+                172800    # contribution window (2 days)
             )
-            
-            # Get user's nonce
+
             nonce = self.w3.eth.get_transaction_count(creator_checksum)
-            
-            # Build transaction data
+
+            # ✅ EIP-1559 fee calculation — Core Wallet always signs as type 0x02
+            latest_block = self.w3.eth.get_block('latest')
+            base_fee = latest_block.get('baseFeePerGas', self.w3.to_wei(25, 'gwei'))
+            max_priority_fee = self.w3.to_wei(2, 'gwei')   # tip to validator
+            max_fee = (base_fee * 2) + max_priority_fee     # covers base fee spikes
+
+            logger.info(
+                f"EIP-1559 fees — base: {base_fee / 1e9:.2f} Gwei, "
+                f"maxFee: {max_fee / 1e9:.2f} Gwei, "
+                f"priorityFee: {max_priority_fee / 1e9:.2f} Gwei"
+            )
+
+            # ✅ Build as EIP-1559 (type 2) — matches what Core Wallet will sign
             transaction_data = self.factory_contract.functions.createGroup(config).build_transaction({
                 'from': creator_checksum,
                 'nonce': nonce,
-                'gasPrice': self._get_gas_price(),
-                'gas': self.default_gas_limit  # Will be estimated on frontend
+                'maxFeePerGas': max_fee,
+                'maxPriorityFeePerGas': max_priority_fee,
+                'gas': self.default_gas_limit,
+                'type': 2,
+                'chainId': 43113,
             })
-            
-            # Estimate gas
-            estimated_gas = self._estimate_gas_for_user(transaction_data, creator_address)
-            
+
+            estimated_gas = self._estimate_gas_for_user(transaction_data, creator_checksum)
+            estimated_cost_avax = round((max_fee * estimated_gas) / 1e18, 6)
+
             return {
                 'success': True,
                 'transaction': {
-                    'to': self.factory_address,
-                    'from': creator_address.lower(),
-                    'data': transaction_data['data'],
-                    'gas': hex(estimated_gas),
-                    'gasPrice': hex(transaction_data['gasPrice']),
-                    'nonce': hex(nonce),
-                    'value': '0x0',
-                    'chainId': self.w3.eth.chain_id
+                    'to':                   self.factory_address,
+                    'from':                 creator_checksum,        # ✅ checksum, not lowercase
+                    'data':                 transaction_data['data'],
+                    'gas':                  hex(estimated_gas),
+                    'maxFeePerGas':         hex(max_fee),            # ✅ EIP-1559
+                    'maxPriorityFeePerGas': hex(max_priority_fee),   # ✅ EIP-1559
+                    'nonce':                hex(nonce),
+                    'value':                '0x0',
+                    'chainId':              hex(43113),
+                    'type':                 '0x2',
                 },
                 'message': 'Transaction prepared. Please sign with your wallet.',
-                'estimated_gas': estimated_gas
+                'estimated_gas': estimated_gas,
+                'debug': {
+                    'base_fee_gwei':         round(base_fee / 1e9, 4),
+                    'max_fee_gwei':          round(max_fee / 1e9, 4),
+                    'priority_fee_gwei':     round(max_priority_fee / 1e9, 4),
+                    'estimated_gas':         estimated_gas,
+                    'estimated_cost_avax':   estimated_cost_avax,
+                }
             }
-            
+
         except Exception as e:
-            logger.error(f"Group creation preparation failed: {e}")
+            logger.error(f"Group creation preparation failed: {e}", exc_info=True)
             return {'success': False, 'error': str(e)}
-        async def wait_for_transaction_confirmation(
-            self,
-            tx_hash: str,
-            timeout: int = 120
-        ) -> Dict[str, Any]:
+
+
+    async def wait_for_transaction_confirmation(
+        self,
+        tx_hash: str,
+        timeout: int = 120
+    ) -> Dict[str, Any]:
+        try:
+            if not tx_hash.startswith('0x') or len(tx_hash) != 66:
+                return {'success': False, 'error': 'Invalid transaction hash'}
+
+            # Verify tx was actually broadcast before polling
             try:
-                if not tx_hash.startswith('0x') or len(tx_hash) != 66:
-                    return {'success': False, 'error': 'Invalid transaction hash'}
-
-                # ✅ Verify tx was actually broadcast before polling
-                try:
-                    tx = await asyncio.get_event_loop().run_in_executor(
-                        None, lambda: self.w3.eth.get_transaction(tx_hash)
-                    )
-                    if tx is None:
-                        return {
-                            'success': False,
-                            'error': 'Transaction not found on network — it may not have been broadcast'
-                        }
-                except Exception as e:
-                    return {'success': False, 'error': f'Could not verify transaction: {e}'}
-
-                # ✅ Non-blocking wait
-                try:
-                    receipt = await asyncio.get_event_loop().run_in_executor(
-                        None,
-                        lambda: self.w3.eth.wait_for_transaction_receipt(tx_hash, timeout=timeout)
-                    )
-                except TimeExhausted:
+                tx = await asyncio.get_event_loop().run_in_executor(
+                    None, lambda: self.w3.eth.get_transaction(tx_hash)
+                )
+                if tx is None:
                     return {
                         'success': False,
-                        'error': f'Transaction not confirmed within {timeout}s — still pending'
+                        'error': 'Transaction not found on network — it may not have been broadcast'
                     }
+            except Exception as e:
+                return {'success': False, 'error': f'Could not verify transaction: {e}'}
 
-                if receipt['status'] != 1:
-                    return {'success': False, 'error': 'Transaction reverted on blockchain'}
-
-                # Parse GroupCreated event for contract address
-                contract_address = None
-                for log in receipt['logs']:
-                    try:
-                        parsed_log = self.factory_contract.events.GroupCreated().process_log(log)
-                        contract_address = parsed_log['args'].get('groupAddress')
-                        break
-                    except Exception as log_err:
-                        logger.debug(f"Skipping log: {log_err}")
-                        continue
-
-                if not contract_address:
-                    contract_address = receipt.get('contractAddress')
-
-                if not contract_address:
-                    logger.error(f"No contract address in receipt: {receipt}")
-                    return {'success': False, 'error': 'Contract address missing from receipt'}
-
+            # Non-blocking wait
+            try:
+                receipt = await asyncio.get_event_loop().run_in_executor(
+                    None,
+                    lambda: self.w3.eth.wait_for_transaction_receipt(tx_hash, timeout=timeout)
+                )
+            except TimeExhausted:
                 return {
-                    'success': True,
-                    'contract_address': contract_address,
-                    'tx_hash': tx_hash,
-                    'block_number': receipt['blockNumber'],
-                    'gas_used': receipt['gasUsed']
+                    'success': False,
+                    'error': f'Transaction not confirmed within {timeout}s — still pending'
                 }
 
-            except Exception as e:
-                logger.error(f"Transaction confirmation failed: {e}", exc_info=True)
-                return {'success': False, 'error': str(e)}
+            if receipt['status'] != 1:
+                return {'success': False, 'error': 'Transaction reverted on blockchain'}
+
+            # Parse GroupCreated event for contract address
+            contract_address = None
+            for log in receipt['logs']:
+                try:
+                    parsed_log = self.factory_contract.events.GroupCreated().process_log(log)
+                    contract_address = parsed_log['args'].get('groupAddress')
+                    break
+                except Exception as log_err:
+                    logger.debug(f"Skipping log: {log_err}")
+                    continue
+
+            if not contract_address:
+                contract_address = receipt.get('contractAddress')
+
+            if not contract_address:
+                logger.error(f"No contract address in receipt: {receipt}")
+                return {'success': False, 'error': 'Contract address missing from receipt'}
+
+            return {
+                'success': True,
+                'contract_address': contract_address,
+                'tx_hash': tx_hash,
+                'block_number': receipt['blockNumber'],
+                'gas_used': receipt['gasUsed']
+            }
+
+        except Exception as e:
+            logger.error(f"Transaction confirmation failed: {e}", exc_info=True)
+            return {'success': False, 'error': str(e)}
 
     async def prepare_join_group_transaction(self, group_address: str, user_address: str) -> Dict[str, Any]:
         """Prepare a join group transaction for user to sign"""
