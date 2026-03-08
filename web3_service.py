@@ -10,7 +10,7 @@ from hexbytes import HexBytes
 from eth_account import Account
 from eth_utils import is_address, to_checksum_address
 import logging
-
+import asyncio
 from schemas import GroupCreate
 
 # Configure loggingCreate
