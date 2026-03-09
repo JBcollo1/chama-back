@@ -565,7 +565,7 @@ class Web3Service:
                 checksum_address = to_checksum_address(user_address)
                 logger.info(f"Calling isMember for address: {checksum_address}")
                 
-                is_member = group_contract.functions.isMember(checksum_address).call()
+                is_member = group_contract.functions.getMemberDetails(checksum_address).call()
                 logger.info(f"isMember result: {is_member}")
                 
                 if not is_member:
@@ -921,11 +921,24 @@ class Web3Service:
                 return {'success': False, 'error': 'Invalid address'}
             
             group_contract = self._get_group_contract(group_address)
-            is_member = group_contract.functions.isMember(to_checksum_address(member_address)).call()
-            
+            member = group_contract.functions.getMemberDetails(to_checksum_address(member_address)).call()
+            logger.info(
+                f"Member details for {to_checksum_address(member_address)} -> "
+                f"exists: {member[0]}, "
+                f"active: {member[1]}, "
+                f"joinedAt: {member[2]}, "
+                f"totalContributed: {member[3]}, "
+                f"missedContributions: {member[4]}, "
+                f"consecutiveFines: {member[5]}"
+            )
+
             return {
-                'success': True,
-                'is_member': is_member
+                   "exists": member[0],
+                    "active": member[1],
+                    "joinedAt": member[2],
+                    "totalContributed": member[3],
+                    "missedContributions": member[4],
+                    "consecutiveFines": member[5]
             }
             
         except Exception as e:

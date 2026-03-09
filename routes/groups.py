@@ -561,7 +561,7 @@ class GroupRoutes:
             db.add(user)
             db.commit()
             db.refresh(user)
-            
+        group_address = group.contract_address
         if group.contract_address is not None:  # This is a blockchain group
             if not wallet_address:
                 raise HTTPException(
@@ -574,6 +574,11 @@ class GroupRoutes:
                 raise HTTPException(status_code=400, detail="Invalid wallet address format.")
         
         # Check if user is already a member
+        existing_mem = await self.web3_service.is_member(group_address, wallet_address)
+        logger.info(f"Blockchain member details: {existing_mem}")
+        if existing_mem and existing_mem.get("exists"):
+            logger.info(f"User {wallet_address} is already a member on the blockchain.")
+            raise HTTPException(status_code=400, detail="User already joined on blockchain")
         existing_member = db.query(GroupMember).filter(
             GroupMember.group_id == group_id,
             GroupMember.user_id == member_data.user_id
