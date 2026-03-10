@@ -14,7 +14,8 @@ from schemas import (
     GroupAdminCreate, GroupAdminResponse, BlockchainSyncResponse, TransactionResponse,
     GroupMemberConfirmationResponse, BlockchainInfo, GroupMemberBlockchainInfo, ConfirmMemberJoinRequest
 )
-from web3_service import Web3Service
+from web3_files.web3_main import Web3Service
+from web3_files.web3_service import Web3JoinFunctions
 import logging
 
 logger = logging.getLogger(__name__)
@@ -22,7 +23,7 @@ logger = logging.getLogger(__name__)
 class GroupRoutes:
     def __init__(self):
         self.router = APIRouter(prefix="/groups", tags=["groups"])
-        self.web3_service = Web3Service()
+        self.web3_service = Web3JoinFunctions()
         self._register_routes()
     
     def _register_routes(self):
