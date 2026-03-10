@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 class Web3JoinFunctions():
     w3 = web3_service.w3
     group_abi = web3_service.group_abi
+    default_gas_limit = web3_service.default_gas_limit
 
     def _get_gas_price(self) -> int:
         """Get current gas price with fallback"""
