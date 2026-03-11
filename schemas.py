@@ -127,11 +127,21 @@ class GroupMemberCreate(BaseSchema):
 class GroupMemberUpdate(BaseSchema):
     status: Optional[MemberStatus] = None
 
+class ProfileResponse(BaseSchema):
+    display_name: Optional[str]
+    email: Optional[str]
+    class Config:
+        orm_mode = True
+
 class GroupMemberResponse(GroupMemberBase):
     id: UUID
     status: MemberStatus
     joined_at: datetime
     left_at: Optional[datetime] = None
+    user: Optional[ProfileResponse]
+
+    class Config:
+        orm_mode = True
 
 class GroupMemberBlockchainInfo(BaseModel):
     wallet_address: str

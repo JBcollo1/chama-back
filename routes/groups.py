@@ -491,7 +491,7 @@ class GroupRoutes:
             raise HTTPException(status_code=404, detail="Group not found")
         
         group_details = GroupWithDetails.model_validate(group)
-        
+        logger.info(group_details)
         # Add blockchain verification
         if group.contract_address is not None:
             try:
