@@ -143,7 +143,7 @@ class Web3JoinFunctions():
                 'success': True,
                 'transaction': {
                     'to':                   self.factory_address,
-                    'from':                 creator_checksum,        #  checksum, not lowercase
+                    'from':                 creator_checksum,        #  checksum
                     'data':                 transaction_data['data'],
                     'gas':                  hex(estimated_gas),
                     'maxFeePerGas':         hex(max_fee),            #  EIP-1559
@@ -180,7 +180,7 @@ class Web3JoinFunctions():
             if not tx_hash.startswith('0x') or len(tx_hash) != 66:
                 return {'success': False, 'error': 'Invalid transaction hash'}
 
-            # Verify tx was actually broadcast before polling
+           
             try:
                 tx = await asyncio.get_event_loop().run_in_executor(
                     None, lambda: self.w3.eth.get_transaction(tx_hash)
