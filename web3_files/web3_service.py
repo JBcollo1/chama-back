@@ -86,7 +86,7 @@ class Web3JoinFunctions():
                     group_data.max_members,
                     int(group_data.start_date.timestamp()) if group_data.start_date else now + 3600,
                     int(group_data.end_date.timestamp()) if group_data.end_date else now + 30 * 24 * 60 * 60,
-                    # ✅ Use whichever field exists
+                    
                     getattr(group_data, 'contribution_frequency', None) 
                     or getattr(group_data, 'contribution_cycle', None) 
                     or "weekly",

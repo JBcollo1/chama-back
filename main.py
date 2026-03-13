@@ -11,7 +11,7 @@ import os
 
 # Import database and models
 from database import engine, Base
-from models import *  # Import all models to ensure they're registered
+from models import *  
 
 # Import routes
 from routes.groups import router as groups_router
