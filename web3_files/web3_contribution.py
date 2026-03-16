@@ -84,3 +84,29 @@ class ContributionContractService:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except Exception as exc:
             raise HTTPException(status_code=500, detail=self.web3._parse_web3_error(exc)) from exc
+
+
+    # contribution window and period functions
+    
+    def is_contribution_window_open(self, group_contract_address: str) -> bool :
+        try:
+            return self._get_group_contract(group_contract_address).functions.isContributionWindowOpen().call()
+        except Exception as exc:
+            raise HTTPException(status_code = 502, detail = self.web3._parse_web3_error(exec)) from exc
+
+
+    def get_current_period(self, group_contract_address: str) -> int:
+        try:
+            return self._get_group_contract(group_contract_address).functions.getCurrentPeriod().call()
+        except Exception as exc:
+            raise HTTPException(status_code = 502, detail = self.web3._parse_web3_error(exc)) from exc
+
+
+    def get_member_contribution_timestamp(self, group_contract_address: str, member_wallet: str, period: int) -> int:
+        try:
+            return self._get_group_contract(group_contract_address).functions.getMemmberContributionTimestamp(
+                Web3.to_checksum_address(member_wallet),
+                period
+            ).call()
+        except Exception as exc:
+            raise HTTPException(status_code = 502, detail= self.web3._parse_web3_error(exc)) from exc
