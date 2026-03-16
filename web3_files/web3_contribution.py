@@ -87,7 +87,7 @@ class ContributionContractService:
 
 
     # contribution window and period functions
-    
+
     def is_contribution_window_open(self, group_contract_address: str) -> bool :
         try:
             return self._get_group_contract(group_contract_address).functions.isContributionWindowOpen().call()
@@ -110,3 +110,53 @@ class ContributionContractService:
             ).call()
         except Exception as exc:
             raise HTTPException(status_code = 502, detail= self.web3._parse_web3_error(exc)) from exc
+
+
+    
+    # member states functions
+    def get_member_details(self, group_contract_address: str, member_wallet: str) -> dict:
+        try:
+            exists, active, joined_at, total_contributed, missed, fines = (
+                self._get_group_contract(group_contract_address)
+                .functions.getMemberDetails(Web3.to_checksum_address(member_wallet))
+                .call()
+            )
+            return {
+                "wallet": member_wallet,
+                "exists": exists,
+                "is_active": active,
+                "joined_at": joined_at,
+                "total_contributed": total_contributed,
+                "missed_contributions": missed,
+                "consecutive_fines": fines,
+            }
+
+        except Exception as exc:
+            raise HTTPException(status_code = 502, detail = self.web3._parse_web3_error(exc)) from exc
+
+    def get_missed_periods(self, group_contract_address: str, member_wallet: str) -> list[int]:
+        try:
+            return self._get_group_contract(group_contract_address).functions.getMissedPeriods(
+                Web3.to_checksum_address(member_wallet)
+            ).call()
+        except Exception as exc:
+            raise HTTPException(status_code = 502, detail = self.web3._parse_web3_error(exc)) from exc
+
+    def get_punishment_details(self, group_contract_address: str, member_wallet: str) -> dict:
+        
+        try:
+            action, reason, active, issued_at, fine_amount = (
+                self._get_group_contract(group_contract_address)
+                .functions.getPunishmentDetails(Web3.to_checksum_address(member_wallet))
+                .call()
+            )
+            return {
+                "wallet": member_wallet,
+                "action": action,
+                "reason": reason,
+                "is_active": active,
+                "issued_at": issued_at,
+                "fine_amount": fine_amount,
+            }
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=self.web3._parse_web3_error(exc)) from exc
