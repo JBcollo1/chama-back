@@ -10,11 +10,13 @@ from models import Contribution, Group, GroupMember, ContributionStatus
 from schemas import ContributionCreate, ContributionUpdate, ContributionResponse
 from web3_files.web3_contribution import ContributionContractService
 from web3_files.web3_main import Web3Service
+from web3_files.initialize import contribution_contract_svc  
+
 
 
 def get_contract_service() -> ContributionContractService:
-    """FastAPI dependency — returns a shared ContributionContractService instance."""
-    return ContributionContractService(Web3Service())
+    
+    return contribution_contract_svc 
 
 
 class ContributionRoutes:
