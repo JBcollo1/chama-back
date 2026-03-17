@@ -407,4 +407,38 @@ class ContributionContractService:
             except Exception as exc:
                 raise HTTPException(status_code=502, detail=self.web3._parse_web3_error(exc)) from exc
 
-                
+
+
+    # Helper for contribution routes
+    def sync_contribution_status(
+        self,
+        group_contract_address: str,
+        member_wallet: str,
+        period: Optional[int] = None,
+
+    )-> dict:
+        if period is None:
+            period = self.get_current_period(group_contract_address)
+
+        ts = self.get_member_contribution_timestamp(group_contract_address, member_wallet, period)
+        member = self.get_member_details(group_contract_address, member_wallet)
+        punishment = self.get_punishment_details(group_contract_address, member_wallet)
+
+        return{
+            "contributed": ts > 0,
+            "contribution_timestamp": ts,
+            "is_active": member["is_active"],
+            "missed_contributions": member["missed_contributions"],
+            "has_active_punishment": punishment["is_active"],
+            "punishment_action": punishment["action"],
+            "fine_amount": punishment["fine_amount"]
+        }
+
+    def get_group_on_chain_summart(self, group_contract_address: str) -> dict:
+        return{
+            "contract_address": group_contract_address,
+            "current_period": self.get_current_period(group_contract_address),
+            "active_member_count": self.get_active_member_count(group_contract_address),
+            "contract_balance": self.get_contract_balance(group_contract_address),
+            "contribution_window_open": self.is_contribution_window_open(group_contract_address),
+        }
