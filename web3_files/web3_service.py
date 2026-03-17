@@ -12,7 +12,7 @@ from eth_utils import is_address, to_checksum_address
 import logging
 import asyncio
 from schemas import GroupCreate
-from web3_files.web3_main import web3_service
+from .initialize import web3_service
 
 # Configure loggingCreate
 logging.basicConfig(level=logging.INFO)

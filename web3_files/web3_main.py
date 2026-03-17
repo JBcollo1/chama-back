@@ -137,5 +137,3 @@ class Web3Service:
             return contract_artifact['abi']
 
 
-
-web3_service = Web3Service()

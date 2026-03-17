@@ -4,7 +4,7 @@ from uuid import UUID
 
 from fastapi import HTTPException
 from web3 import Web3
-from web3.exception import ContractLogicError
+from web3.exceptions import ContractLogicError
 
 from .web3_main import Web3Service
 
@@ -23,7 +23,7 @@ class ContributionContractService:
             address = checksum_address,
             abi = self.web3.group_abi,
         )
-   def _build_unsigned_tx(self, fn, caller_wallet: str, value_wei: int = 0) => dict:
+    def _build_unsigned_tx(self, fn, caller_wallet: str, value_wei: int = 0) -> dict:
         try:
             tx = fn.build_transaction(
                 {
@@ -234,7 +234,7 @@ class ContributionContractService:
                     detail = "Member has already contributed for current period"
                 )
 
-            value_wei= 0 id is_token_based else contribution_amount_wei
+            value_wei= 0 if is_token_based else contribution_amount_wei
             tx = self._build_unsigned_tx(contract.functions.contribute(), member_wallet, value_wei)
 
             tx["_meta"] = {
@@ -261,8 +261,8 @@ class ContributionContractService:
     ) -> dict:
         try:
             contract = self._get_group_contract(group_contract_address)
-                        action, _reason, is_active, _issued_at, fine_amount = (
-                contract.functions.getPunishmentDetails(Web3.to_checksum_address(member_wallet)).call()
+            action, _reason, is_active, _issued_at, fine_amount = (
+                  contract.functions.getPunishmentDetails(Web3.to_checksum_address(member_wallet)).call()
             )
  
             if not is_active:
@@ -329,12 +329,12 @@ class ContributionContractService:
             fn = self._get_group_contract(group_contract_address).functions.batchCheckMissedContribution(checksum_members)
 
             tx_hash = self._sign_and_send(fn)
-            logger.info("batch checked cinfirmed (%d members): %s" len(member_wallets), tx_hash)
+            logger.info("batch checked cinfirmed (%d members): %s", len(member_wallets), tx_hash)
             return tx_hash
 
-            except HTTPException:
+        except HTTPException:
                 raise
-            except Exception as exc:
+        except Exception as exc:
                 raise HTTPException(status_code= 500, detail = self.web3._parse_web3_error(exc)) from exc
 
     
@@ -345,9 +345,9 @@ class ContributionContractService:
             logger.info("Reset last checked period for %s to period %d: %s", member_wallet,peiod, tx_hash)
             return tx_hash
 
-            except HTTPException:
+        except HTTPException:
                 raise
-            except Exception as exc:
+        except Exception as exc:
                 raise HTTPException(status_code= 500, detail = self.web3._parse_web3_error(exc)) from exc
 
     def set_payout_queue(self, group_contract_address: str, ordered_wallets: list[str]) -> str:
@@ -358,9 +358,9 @@ class ContributionContractService:
             logger.info("Set payout queue for %s: %s", group_contract_address, tx_hash)
             return tx_hash
 
-            except HTTPException:
+        except HTTPException:
                 raise
-            except Exception as exc:
+        except Exception as exc:
                 raise HTTPException(status_code= 500, detail = self.web3._parse_web3_error(exc)) from exc
 
 
@@ -402,9 +402,9 @@ class ContributionContractService:
                 "block_number": receipt.blockNumber,
             }
 
-            except HTTPException:
+        except HTTPException:
                 raise
-            except Exception as exc:
+        except Exception as exc:
                 raise HTTPException(status_code=502, detail=self.web3._parse_web3_error(exc)) from exc
 
 
