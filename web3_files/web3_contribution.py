@@ -287,3 +287,24 @@ class ContributionContractService:
             raise
         except Exception as exc:
             raise HTTPException(status_code=500, detail=self.web3._parse_web3_error(exc)) from exc
+
+    # initial task scheduling
+    def process_rotation_payout(self,group_contract_address: str) -> str:
+        try:
+            contract = self._get_group_contract(group_contract_address)
+            period = contract.functions.getCurrentPeriod().call()
+
+            recipient, _amount, _ts, _skipped = contract.functions.getPayoutInfo(period).call()
+
+            if recipient != "0x0000000000000000000000000000000000000000":
+                raise HTTPException(status_code=400, detail=f"Payout already processed for this period {period}")
+
+            tx_hash = self._sign_and_send_tx(contract.functions.processRotationPayout())
+
+            logger.info("Rotation payout confirmed for period %d: %s", period, tx_hash)
+            return tx_hash
+
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=self.web3._parse_web3_error(exc)) from exc
