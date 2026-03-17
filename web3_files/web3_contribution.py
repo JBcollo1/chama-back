@@ -209,6 +209,7 @@ class ContributionContractService:
 
 
     # prepare unsigned build for the frontend
+
     def build_contribute_tx(
         self,
         group_contract_address: str,
@@ -216,39 +217,73 @@ class ContributionContractService:
         contribution_amount_wei: int,
         is_token_based: bool,
     ) -> dict:
-    try:
-        contract = self._get_group_contract(group_contract_address)
-        checksum_member = Web3.to_checksum_address(member_wallet)
+        try:
+            contract = self._get_group_contract(group_contract_address)
+            checksum_member = Web3.to_checksum_address(member_wallet)
 
-        if not contract.functions.isContributionWindowOpen().call():
-            raise HTTPException(
-                status_code= 400,
-                drtail = "Contribution window is currently closed for this  period."
+            if not contract.functions.isContributionWindowOpen().call():
+                raise HTTPException(
+                    status_code= 400,
+                    drtail = "Contribution window is currently closed for this  period."
+                )
+            period = contract.functions.getCurrentPeriod().call()
+
+            if contract.functions.getMemmberContributionTimestamp(checksum_member, period). call() !=0:
+                raise HTTPException (
+                    status_code = 400,
+                    detail = "Member has already contributed for current period"
+                )
+
+            value_wei= 0 id is_token_based else contribution_amount_wei
+            tx = self._build_unsigned_tx(contract.functions.contribute(), member_wallet, value_wei)
+
+            tx["_meta"] = {
+                "action": "contribute",
+                "period": period,
+                "amount_wei": contribution_amount_wei,
+                "is_token_based": is_token_based,
+            }
+
+            logger.info ("Built contribute tx for %s period %d", member_wallet, period)
+            return tx
+
+        except HTTPException:
+                raise
+        except Exception as exc:
+                raise HTTPException(status_code=500, detail=self.web3._parse_web3_error(exc)) from exc
+
+        
+    def build_pay_fine_tx(
+        self,
+        group_contract_address: str,
+        member_wallet: str,
+        is_token_based: bool,
+    ) -> dict:
+        try:
+            contract = self._get_group_contract(group_contract_address)
+                        action, _reason, is_active, _issued_at, fine_amount = (
+                contract.functions.getPunishmentDetails(Web3.to_checksum_address(member_wallet)).call()
             )
-        period = contract.functions.getCurrentPeriod().call()
-
-        if contract.functions.getMemmberContributionTimestamp(checksum_member, period). call() !=0:
-            raise HTTPException (
-                status_code = 400,
-                detail = "Member has already contributed for current period"
-            )
-
-        value_wei= 0 id is_token_based else contribution_amount_wei
-        tx = self._build_unsigned_tx(contract.functions.contribute(), member_wallet, value_wei)
-
-        tx["_meta"] = {
-            "action": "contribute",
-            "period": period,
-            "amount_wei": contribution_amount_wei,
-            "is_token_based": is_token_based,
-        }
-
-        logger.info ("Built contribute tx for %s period %d", member_wallet, period)
-        return tx
-
+ 
+            if not is_active:
+                raise HTTPException(status_code=400, detail="Member has no active punishment.")
+ 
+            FINE_ACTION = 1  # ChamaStructs.PunishmentAction.Fine
+            if action != FINE_ACTION:
+                raise HTTPException(status_code=400, detail="Active punishment is not a fine — cannot pay.")
+ 
+            value_wei = 0 if is_token_based else fine_amount
+            tx = self._build_unsigned_tx(contract.functions.payFine(), member_wallet, value_wei)
+            tx["_meta"] = {
+                "action": "pay_fine",
+                "fine_amount_wei": fine_amount,
+                "is_token_based": is_token_based,
+            }
+ 
+            logger.info("Built payFine tx for %s — fine: %d wei", member_wallet, fine_amount)
+            return tx
+ 
         except HTTPException:
             raise
         except Exception as exc:
             raise HTTPException(status_code=500, detail=self.web3._parse_web3_error(exc)) from exc
-
-            
