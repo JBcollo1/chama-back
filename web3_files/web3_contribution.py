@@ -362,3 +362,49 @@ class ContributionContractService:
                 raise
             except Exception as exc:
                 raise HTTPException(status_code= 500, detail = self.web3._parse_web3_error(exc)) from exc
+
+
+    # Broadcast Confirmation
+
+    def verify_contribution_on_chain(
+        self,
+        group_contract_address: str,
+        member_wallet: str,
+        expected_period: int,
+        tx_hash: str,
+    ) -> dict:
+        
+        try:
+            receipt = self.web3.w3.eth.wait_for_transaction_receipt(tx_hash, timeout=120)
+
+            if receipt.status == 0:
+                raise HTTPException(
+                    status_code = 400,
+                    detail = "Contribution reverted on chain"
+                )
+            
+            ts = self.get_member_contribution_timestamp(
+                group_contract_address, member_wallet, expected_period
+            )
+
+            if ts == 0:
+                raise HTTPException(
+                    status_code=400, detail= "transaction succeeded but contribution timestamp not found"
+                )
+            
+            logger.info("Contribution verified on-chain: %s period %d tx %s", member_wallet, expected_period, tx_hash)
+
+            return{
+                "verified": True,
+                "tx_hash": tx_hash,
+                "period": expected_period,
+                "contribution_timestamp": ts,
+                "block_number": receipt.blockNumber,
+            }
+
+            except HTTPException:
+                raise
+            except Exception as exc:
+                raise HTTPException(status_code=502, detail=self.web3._parse_web3_error(exc)) from exc
+
+                
