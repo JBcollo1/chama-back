@@ -308,3 +308,57 @@ class ContributionContractService:
             raise
         except Exception as exc:
             raise HTTPException(status_code=500, detail=self.web3._parse_web3_error(exc)) from exc
+
+    def check_missed_contribution(self, group_contract_address: str, member_wallet: str) -> str:
+        try:
+            fn = self._get_group_contract(group_contract_address).functions.checkMissedContribution(Web3.to_checksum_address(member_wallet))
+
+            tx_hash = self._sign_and_send_tx(fn)
+
+            logger.info("Checked missed contribution for %s: %s", member_wallet, tx_hash)
+            return tx_hash
+
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=self.web3._parse_web3_error(exc)) from exc
+
+    def batch_check_missed_contribution(self, group_contract_address: str, member_wallets: list[str]) -> str:
+        try:
+            checksum_members = [Web3.to_checksum_address(member) for member in member_wallets]
+            fn = self._get_group_contract(group_contract_address).functions.batchCheckMissedContribution(checksum_members)
+
+            tx_hash = self._sign_and_send(fn)
+            logger.info("batch checked cinfirmed (%d members): %s" len(member_wallets), tx_hash)
+            return tx_hash
+
+            except HTTPException:
+                raise
+            except Exception as exc:
+                raise HTTPException(status_code= 500, detail = self.web3._parse_web3_error(exc)) from exc
+
+    
+    def reset_last_checked_period(self, group_contract_address: str, member_wallet: str, period: int) -> str:
+        try:
+            fn = self._get_group_contract(group_contract_address).functions.resetLastCheckedPeriod(Web3.to_checksum_address(member_wallet), period)
+            tx_hash = self._sign_amd_send(fn)
+            logger.info("Reset last checked period for %s to period %d: %s", member_wallet,peiod, tx_hash)
+            return tx_hash
+
+            except HTTPException:
+                raise
+            except Exception as exc:
+                raise HTTPException(status_code= 500, detail = self.web3._parse_web3_error(exc)) from exc
+
+    def set_payout_queue(self, group_contract_address: str, ordered_wallets: list[str]) -> str:
+        try:
+            checksum_queue = [Web3.to_checksum_address(w) for w in ordered_wallets]
+            fn = self._get_group_contract(group_contract_address).functions.setPayoutQueue(checksum_queue)
+            tx_hash = self._sign_and_send(fn)
+            logger.info("Set payout queue for %s: %s", group_contract_address, tx_hash)
+            return tx_hash
+
+            except HTTPException:
+                raise
+            except Exception as exc:
+                raise HTTPException(status_code= 500, detail = self.web3._parse_web3_error(exc)) from exc
