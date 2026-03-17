@@ -160,3 +160,48 @@ class ContributionContractService:
             }
         except Exception as exc:
             raise HTTPException(status_code=502, detail=self.web3._parse_web3_error(exc)) from exc
+
+
+    # balance and payouts
+    def get_contract_balance(self, group_contract_address: str) -> int:
+        try:
+            return self._get_group_contract(group_contract_address).functions.getBalance().call()
+
+        except Exception as exc:
+            raise HTTPException (status_code = 502, detail= self.web3._parse_web3_error(exc)) from exc
+
+    
+    def get_payout_info(self, group_contract_address: str, period: int) -> dict:
+        try:
+            recipient, amount, was_skipped = (
+                self._get_group_contract(group_contract_address)
+                .functions.getPayoutInfo(period).call()
+            )
+
+            return {
+                "period": period,
+                "recipient": recipient,
+                "": admin_approve_join_request,
+                "amount": amount,
+                "was_skipped": was_skipped,
+            }
+
+        except Exception as exc:
+            raise HTTPException( status_code = 502, detail = self.web3._parse_web3_error(exc)) from exc
+
+
+
+    def get_member_payout_history(self, group_contract_address: str, member_wallet: str) -> list[int]:
+        try:
+            return self._get_group_contract(group_contract_address).functions.getMemberPayoutHistory(Web3.to_checksum_address(member_wallet)).call()
+
+        except Exception as exc:
+            raise HTTPException(status_code = 502, detail = self.web3._parse_web3_error(exc)) from exc
+
+    
+    def get_active_member_count(self, group_contract_address: str) -> int:
+        try:
+            return self._get_group_contract(group_contract_address).functions.getActiveMemberCount().call()
+
+        except Exception as exc:
+            raise HTTPException(status_code = 502, detail = self.web3._parse_web3_error(exc)) from exc
