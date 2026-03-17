@@ -205,3 +205,50 @@ class ContributionContractService:
 
         except Exception as exc:
             raise HTTPException(status_code = 502, detail = self.web3._parse_web3_error(exc)) from exc
+
+
+
+    # prepare unsigned build for the frontend
+    def build_contribute_tx(
+        self,
+        group_contract_address: str,
+        member_wallet: str,
+        contribution_amount_wei: int,
+        is_token_based: bool,
+    ) -> dict:
+    try:
+        contract = self._get_group_contract(group_contract_address)
+        checksum_member = Web3.to_checksum_address(member_wallet)
+
+        if not contract.functions.isContributionWindowOpen().call():
+            raise HTTPException(
+                status_code= 400,
+                drtail = "Contribution window is currently closed for this  period."
+            )
+        period = contract.functions.getCurrentPeriod().call()
+
+        if contract.functions.getMemmberContributionTimestamp(checksum_member, period). call() !=0:
+            raise HTTPException (
+                status_code = 400,
+                detail = "Member has already contributed for current period"
+            )
+
+        value_wei= 0 id is_token_based else contribution_amount_wei
+        tx = self._build_unsigned_tx(contract.functions.contribute(), member_wallet, value_wei)
+
+        tx["_meta"] = {
+            "action": "contribute",
+            "period": period,
+            "amount_wei": contribution_amount_wei,
+            "is_token_based": is_token_based,
+        }
+
+        logger.info ("Built contribute tx for %s period %d", member_wallet, period)
+        return tx
+
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=self.web3._parse_web3_error(exc)) from exc
+
+            
