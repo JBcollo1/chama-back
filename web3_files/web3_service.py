@@ -22,7 +22,8 @@ class Web3JoinFunctions():
     w3 = web3_service.w3
     group_abi = web3_service.group_abi
     default_gas_limit = web3_service.default_gas_limit
-
+    factory_contract = web3_service.factory_contract
+    factory_address= web3_service.factory_address
     def _get_gas_price(self) -> int:
         """Get current gas price with fallback"""
         try:
