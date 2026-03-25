@@ -15,6 +15,10 @@ import asyncio
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+class Web3ServiceError(Exception):
+    """Raised for Web3/blockchain operation failures."""
+    pass
+
 class Web3Service:
     def __init__(self):
         
@@ -92,7 +96,7 @@ class Web3Service:
 
     def _initialize_admin_account(self):
         """Initialize admin account from private key (optional, only for admin operations)"""
-        self.private_key = os.getenv("ADMIN_PRIVATE_KEY")
+        self.private_key = os.getenv("PRIVATE_KEY")
         self.admin_account = None
         
         if self.private_key:
@@ -105,19 +109,15 @@ class Web3Service:
                 logger.warning(f"Admin account initialization failed: {str(e)}")
         else:
             logger.info("No admin private key provided - admin operations will be disabled")
-    
+
+        
     def _verify_connection(self):
-        """Verify Web3 connection and contract"""
         if not self.is_connected():
             raise Web3ServiceError(f"Failed to connect to Web3 provider: {self.provider_url}")
+        logger.info(f"Successfully connected to Web3 provider: {self.provider_url}")
+        # Remove the get_group_counter() call — it doesn't exist on this service
+
         
-        try:
-            # Test contract connection
-            self.get_group_counter()
-            logger.info(f"Successfully connected to factory contract: {self.factory_address}")
-        except Exception as e:
-            logger.warning(f"Contract connection test failed: {e}")
-    
     def _load_contract_abi(self) -> List[Dict[str, Any]]:
         """Load factory contract ABI from artifacts - throw error if missing"""
         abi_file_path = os.getenv('CONTRACT_ABI_PATH', './artifacts/contracts/ChamaFactory.sol/ChamaFactory.json')

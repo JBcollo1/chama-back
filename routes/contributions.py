@@ -111,9 +111,10 @@ class ContributionRoutes:
             summary="Backend-signed: emergency reset of lastCheckedPeriod for a member",
         )
 
-    
+    # =========================================================================
     # Off-chain CRUD
-  
+    # =========================================================================
+
     def create_contribution(
         self,
         contribution_data: ContributionCreate,
@@ -249,9 +250,9 @@ class ContributionRoutes:
         db.refresh(db_contribution)
         return ContributionResponse.model_validate(db_contribution)
 
-    
+    # =========================================================================
     # Member payment flow  (on-chain)
-   
+    # =========================================================================
 
     def build_contribute_tx(
         self,
@@ -259,7 +260,12 @@ class ContributionRoutes:
         db: Session = Depends(get_db),
         contract_svc: ContributionContractService = Depends(get_contract_service),
     ) -> dict:
-        
+        """
+        Build an unsigned contribute() transaction for the member's wallet to sign.
+
+        Returns the tx payload — frontend passes it to MetaMask / WalletConnect,
+        then calls POST /{contribution_id}/confirm with the resulting tx_hash.
+        """
         db_contribution = db.query(Contribution).filter(Contribution.id == contribution_id).first()
         if not db_contribution:
             raise HTTPException(status_code=404, detail="Contribution not found")
@@ -290,7 +296,13 @@ class ContributionRoutes:
         db: Session = Depends(get_db),
         contract_svc: ContributionContractService = Depends(get_contract_service),
     ) -> ContributionResponse:
-       
+        """
+        Verify the on-chain contribute() tx then mark the off-chain record as paid.
+
+        Called by the frontend after it has broadcast the signed tx.
+        Waits for the receipt, confirms the contribution timestamp on-chain,
+        then syncs the DB record.
+        """
         db_contribution = db.query(Contribution).filter(Contribution.id == contribution_id).first()
         if not db_contribution:
             raise HTTPException(status_code=404, detail="Contribution not found")
@@ -322,9 +334,9 @@ class ContributionRoutes:
         db.refresh(db_contribution)
         return ContributionResponse.model_validate(db_contribution)
 
-  
+    # =========================================================================
     # Fine payment flow  (on-chain)
-    
+    # =========================================================================
 
     def build_pay_fine_tx(
         self,
@@ -332,7 +344,10 @@ class ContributionRoutes:
         db: Session = Depends(get_db),
         contract_svc: ContributionContractService = Depends(get_contract_service),
     ) -> dict:
-      
+        """
+        Build an unsigned payFine() tx for the member's wallet to sign.
+        Fine amount is read from chain and included in _meta for the frontend to display.
+        """
         db_contribution = db.query(Contribution).filter(Contribution.id == contribution_id).first()
         if not db_contribution:
             raise HTTPException(status_code=404, detail="Contribution not found")
@@ -351,9 +366,9 @@ class ContributionRoutes:
             is_token_based=group.is_token_based,
         )
 
-
+    # =========================================================================
     # Group routes
-  
+    # =========================================================================
 
     def get_group_contributions(
         self,
@@ -418,7 +433,11 @@ class ContributionRoutes:
         db: Session = Depends(get_db),
         contract_svc: ContributionContractService = Depends(get_contract_service),
     ) -> dict:
-        
+        """
+        Live on-chain summary for a group: current period, balance,
+        window open/closed, active member count.
+        Complements the off-chain summary with real-time contract state.
+        """
         group = db.query(Group).filter(Group.id == group_id).first()
         if not group or not group.contract_address:
             raise HTTPException(status_code=400, detail="Group has no deployed contract address")
@@ -431,13 +450,50 @@ class ContributionRoutes:
         db: Session = Depends(get_db),
         contract_svc: ContributionContractService = Depends(get_contract_service),
     ) -> dict:
-        
+        """
+        Trigger processRotationPayout() for the current period.
+        Backend-signed using ADMIN_PRIVATE_KEY.
+
+        Pre-checks that all active on-chain members have contributed this period
+        before sending the tx — avoids a guaranteed revert and gives a clear
+        error message instead.
+        """
         group = db.query(Group).filter(Group.id == group_id).first()
         if not group or not group.contract_address:
             raise HTTPException(status_code=400, detail="Group has no deployed contract address")
 
+        # Pre-flight: check contribution window is closed (payout only after window)
+        on_chain = contract_svc.get_group_on_chain_summary(group.contract_address)
+        if on_chain["contribution_window_open"]:
+            raise HTTPException(
+                status_code=400,
+                detail="Contribution window is still open — wait for it to close before processing payout.",
+            )
+
+        # Pre-flight: check all active members have contributed this period
+        current_period = on_chain["current_period"]
+        members = db.query(GroupMember).filter(
+            GroupMember.group_id == group_id,
+            # GroupMember.is_active == True,
+            GroupMember.wallet_address.isnot(None),
+        ).all()
+
+        not_contributed = []
+        for member in members:
+            ts = contract_svc.get_member_contribution_timestamp(
+                group.contract_address, member.wallet_address, current_period
+            )
+            if ts == 0:
+                not_contributed.append(member.wallet_address)
+
+        if not_contributed:
+            raise HTTPException(
+                status_code=400,
+                detail=f"{len(not_contributed)} member(s) have not contributed for period {current_period}: {not_contributed}",
+            )
+
         tx_hash = contract_svc.process_rotation_payout(group.contract_address)
-        return {"tx_hash": tx_hash, "group_id": group_id}
+        return {"tx_hash": tx_hash, "group_id": group_id, "period": current_period}
 
     def batch_check_missed_contributions(
         self,
@@ -447,24 +503,49 @@ class ContributionRoutes:
     ) -> dict:
         """
         Batch check missed contributions for all active members of a group.
-        Backend-signed. Called by the scheduler after the contribution window closes.
+        Backend-signed. Only passes wallets that are actually registered on-chain
+        to avoid contract reverts from unregistered addresses.
         """
         group = db.query(Group).filter(Group.id == group_id).first()
         if not group or not group.contract_address:
             raise HTTPException(status_code=400, detail="Group has no deployed contract address")
 
-        # Fetch all active member wallets for this group
         members = db.query(GroupMember).filter(
             GroupMember.group_id == group_id,
             # GroupMember.is_active == True,
+            GroupMember.wallet_address.isnot(None),
         ).all()
 
-        wallets = [m.wallet_address for m in members if m.wallet_address]
-        if not wallets:
+        if not members:
             raise HTTPException(status_code=400, detail="No active members with wallet addresses found")
 
-        tx_hash = contract_svc.batch_check_missed_contributions(group.contract_address, wallets)
-        return {"tx_hash": tx_hash, "group_id": group_id, "members_checked": len(wallets)}
+        # Filter to only wallets that exist on-chain — unregistered wallets revert the tx
+        registered_wallets = []
+        for member in members:
+            try:
+                details = contract_svc.get_member_details(
+                    group.contract_address, member.wallet_address
+                )
+                if details["exists"] and details["is_active"]:
+                    registered_wallets.append(member.wallet_address)
+            except Exception:
+                # If we can't read the member from chain, skip them
+                continue
+
+        if not registered_wallets:
+            raise HTTPException(
+                status_code=400,
+                detail="No members found on-chain for this group yet.",
+            )
+
+        tx_hash = contract_svc.batch_check_missed_contributions(
+            group.contract_address, registered_wallets
+        )
+        return {
+            "tx_hash": tx_hash,
+            "group_id": group_id,
+            "members_checked": len(registered_wallets),
+        }
 
     def set_payout_queue(
         self,
@@ -484,9 +565,9 @@ class ContributionRoutes:
         tx_hash = contract_svc.set_payout_queue(group.contract_address, ordered_wallets)
         return {"tx_hash": tx_hash, "group_id": group_id}
 
-    
+    # =========================================================================
     # User routes
-   
+    # =========================================================================
 
     def get_user_contributions(
         self,
