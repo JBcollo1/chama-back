@@ -323,10 +323,10 @@ class ContributionContractService:
         except Exception as exc:
             raise HTTPException(status_code=500, detail=self.web3._parse_web3_error(exc)) from exc
 
-    def batch_check_missed_contribution(self, group_contract_address: str, member_wallets: list[str]) -> str:
+    def batch_check_missed_contributions(self, group_contract_address: str, member_wallets: list[str]) -> str:
         try:
             checksum_members = [Web3.to_checksum_address(member) for member in member_wallets]
-            fn = self._get_group_contract(group_contract_address).functions.batchCheckMissedContribution(checksum_members)
+            fn = self._get_group_contract(group_contract_address).functions.batchCheckMissedContributions(checksum_members)
 
             tx_hash = self._sign_and_send(fn)
             logger.info("batch checked cinfirmed (%d members): %s", len(member_wallets), tx_hash)
