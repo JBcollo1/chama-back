@@ -8,6 +8,15 @@ from contextlib import asynccontextmanager
 import uvicorn
 import logging
 import os
+from web3_files.schedular import  build_scheduler
+
+scheduler = build_scheduler()
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    scheduler.start()
+    yield
+    scheduler.shutdown(wait=False)
 
 # Import database and models
 from database import engine, Base

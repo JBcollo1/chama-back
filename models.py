@@ -199,6 +199,7 @@ class Contribution(Base):
     amount = Column(Float, nullable=False)
     due_date = Column(DateTime, nullable=False)
     paid_date = Column(DateTime, nullable=True)
+    
     status = Column(Enum(ContributionStatus), default=ContributionStatus.pending)
     transaction_hash = Column(String, nullable=True)
     notes = Column(Text, nullable=True)
