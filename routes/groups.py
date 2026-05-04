@@ -34,6 +34,8 @@ class GroupRoutes:
         self.router.add_api_route("/{group_id}", self.get_group, methods=["GET"], response_model=GroupWithDetails)
         self.router.add_api_route("/{group_id}", self.update_group, methods=["PUT"], response_model=GroupResponse)
         self.router.add_api_route("/{group_id}", self.delete_group, methods=["DELETE"])
+
+        self.router.add_api_route("/debug/force-create-records", self.force_create_records, methods=["POST"])
         
         # Member management with Web3 integration
         self.router.add_api_route("/{group_id}/members", self.add_member, methods=["POST"], response_model=Union[GroupMemberResponse, TransactionResponse])
@@ -69,7 +71,61 @@ class GroupRoutes:
         self.router.add_api_route("/blockchain/stats", self.get_blockchain_stats, methods=["GET"])
         self.router.add_api_route("/blockchain/gas-estimates", self.get_gas_estimates, methods=["GET"])
         self.router.add_api_route("/creator/{creator_address}/blockchain", self.get_creator_groups_blockchain, methods=["GET"])
-    
+    async def force_create_records(self):
+        from database import SessionLocal
+        from models import Group, GroupMember, Contribution, ContributionStatus
+        from web3_files.schedular import _active_groups, _period_due_date
+        from web3_files.initialize import contribution_contract_svc
+        import datetime
+
+        db = SessionLocal()
+        results = []
+        try:
+            groups = _active_groups(db)
+            results.append(f"Found {len(groups)} active groups")
+
+            for group in groups:
+                members = db.query(GroupMember).filter(
+                    GroupMember.group_id == group.id,
+                    GroupMember.status == "active",
+                ).all()
+                results.append(f"Group {group.name}: {len(members)} active members")
+                
+                for m in members:
+                    results.append(f"  member {m.id} wallet={m.wallet_address}")
+
+                period = contribution_contract_svc.get_current_period(group.contract_address)
+                results.append(f"  on-chain period: {period}")
+
+                for member in members:
+                    if not member.wallet_address:
+                        results.append(f"  SKIP {member.id} — no wallet")
+                        continue
+                    exists = db.query(Contribution).filter(
+                        Contribution.group_id == group.id,
+                        Contribution.member_id == member.id,
+                        Contribution.period == period,
+                    ).first()
+                    if exists:
+                        results.append(f"  SKIP {member.id} — record exists")
+                        continue
+                    db.add(Contribution(
+                        group_id=group.id,
+                        member_id=member.id,
+                        amount=group.contribution_amount,
+                        status=ContributionStatus.pending,
+                        due_date=_period_due_date(group, period),
+                        period=period,
+                    ))
+                    results.append(f"  CREATED record for {member.id}")
+            
+            db.commit()
+            return {"steps": results}
+        except Exception as e:
+            db.rollback()
+            return {"error": str(e), "steps": results}
+        finally:
+            db.close()
     # NEW: Web3 Transaction Preparation Endpoints
     async def prepare_group_creation_transaction(
         self, 

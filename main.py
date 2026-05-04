@@ -1,5 +1,6 @@
 from dotenv import load_dotenv
 load_dotenv()
+
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -8,96 +9,125 @@ from contextlib import asynccontextmanager
 import uvicorn
 import logging
 import os
-from web3_files.schedular import  build_scheduler
-
-scheduler = build_scheduler()
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    scheduler.start()
-    yield
-    scheduler.shutdown(wait=False)
 
 # Import database and models
 from database import engine, Base
-from models import *  
+from models import *
 
 # Import routes
 from routes.groups import router as groups_router
 from routes.contributions import router as contributions_router
 from auth.auth_routes import router as auth_router
-import socket
+from web3_files.schedular import build_scheduler   # ← import only, don't call yet
 
+import socket
 socket.setdefaulttimeout(30)
 socket.has_ipv6 = False
 
-# Configure logging  
 logging.basicConfig(level=logging.INFO)
+logging.getLogger("apscheduler").setLevel(logging.DEBUG)  # ← see scheduler errors
 logger = logging.getLogger(__name__)
 
+
 def check_environment_variables():
-    """Check if all required environment variables are set"""
     required_vars = [
         "SUPABASE_URL",
-        "SUPABASE_ANON_KEY", 
+        "SUPABASE_ANON_KEY",
         "SUPABASE_SERVICE_ROLE_KEY",
         "SECRET_KEY",
     ]
-    
-    missing_vars = []
-    for var in required_vars:
-        value = os.getenv(var)
-        if not value:
-            missing_vars.append(var)
-        else:
-            # Show partial value for debugging (don't expose full secrets)
-            if "KEY" in var or "SECRET" in var:
-                logger.info(f"{var}: {value[:10]}...{value[-4:] if len(value) > 14 else ''}")
-            else:
-                logger.info(f"{var}: {value}")
-    
+    missing_vars = [v for v in required_vars if not os.getenv(v)]
     if missing_vars:
         raise ValueError(f"Missing required environment variables: {missing_vars}")
-    
     logger.info("All required environment variables are set")
 
+
+# ── ONE lifespan, scheduler started here ──────────────────────────────────────
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Application lifespan events"""
-    # Startup
     logger.info("Starting up FastAPI application...")
     try:
-        # Check environment variables
         check_environment_variables()
-        
-        # Create tables if they don't exist
         Base.metadata.create_all(bind=engine)
-        logger.info("Database tables created successfully")
-        logger.info(f"Available tables: {list(Base.metadata.tables.keys())}")
-        
-        # Log environment info
-        env = os.getenv("ENV", "development")
-        frontend_url = os.getenv("FRONTEND_URL", "http://localhost:3000")
-        logger.info(f"Environment: {env}")
-        logger.info(f"Frontend URL: {frontend_url}")
-        
+        logger.info("Database tables ready")
+
+        # ✅ Build AND start scheduler here, inside lifespan
+        scheduler = build_scheduler()
+        scheduler.start()
+        logger.info("✅ Scheduler started — jobs: %s", [j.id for j in scheduler.get_jobs()])
+
     except Exception as e:
         logger.error(f"Startup error: {e}")
         raise
-    
-    yield
-    
-    # Shutdown
-    logger.info("Shutting down FastAPI application...")
 
-# Create FastAPI app
+    yield
+
+    logger.info("Shutting down...")
+    scheduler.shutdown(wait=False)
+    logger.info("🛑 Scheduler stopped")
+
+
 app = FastAPI(
     title="Supabase FastAPI Backend",
-    description="A FastAPI backend that replicates Supabase table structure using SQLAlchemy",
     version="1.0.0",
-    lifespan=lifespan
+    lifespan=lifespan,   # ← only one lifespan
 )
+@app.post("/debug/force-create-records")
+async def force_create_records():
+    from database import SessionLocal
+    from models import Group, GroupMember, Contribution, ContributionStatus
+    from web3_files.schedular import _active_groups, _period_due_date
+    from web3_files.initialize import contribution_contract_svc
+    import datetime
 
+    db = SessionLocal()
+    results = []
+    try:
+        groups = _active_groups(db)
+        results.append(f"Found {len(groups)} active groups")
+
+        for group in groups:
+            members = db.query(GroupMember).filter(
+                GroupMember.group_id == group.id,
+                GroupMember.status == "active",
+            ).all()
+            results.append(f"Group {group.name}: {len(members)} active members")
+            
+            for m in members:
+                results.append(f"  member {m.id} wallet={m.wallet_address}")
+
+            period = contribution_contract_svc.get_current_period(group.contract_address)
+            results.append(f"  on-chain period: {period}")
+
+            for member in members:
+                if not member.wallet_address:
+                    results.append(f"  SKIP {member.id} — no wallet")
+                    continue
+                exists = db.query(Contribution).filter(
+                    Contribution.group_id == group.id,
+                    Contribution.member_id == member.id,
+                    Contribution.period == period,
+                ).first()
+                if exists:
+                    results.append(f"  SKIP {member.id} — record exists")
+                    continue
+                db.add(Contribution(
+                    group_id=group.id,
+                    member_id=member.id,
+                    amount=group.contribution_amount,
+                    status=ContributionStatus.pending,
+                    due_date=_period_due_date(group, period),
+                    period=period,
+                ))
+                results.append(f"  CREATED record for {member.id}")
+        
+        db.commit()
+        return {"steps": results}
+    except Exception as e:
+        db.rollback()
+        return {"error": str(e), "steps": results}
+    finally:
+        db.close()
 # Environment-aware CORS configuration
 ENV = os.getenv("ENV", "development")
 FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3000")

@@ -66,7 +66,7 @@ def _active_members(db: Session, group_id) -> list[GroupMember]:
         db.query(GroupMember)
         .filter(
             GroupMember.group_id == group_id,
-            GroupMember.is_active == True,
+            GroupMember.is_active == "active",
             GroupMember.wallet_address.isnot(None),
         )
         .all()
@@ -115,11 +115,10 @@ def _period_due_date(group: Group, period: int) -> datetime:
     return _period_start(group, period + 1)
 
 
-def _group_needs_period_check(group: Group) -> bool:
+def _get_period_position(group: Group) -> tuple[float, float]:
     """
-    Return True only if the current wall-clock time is within 2 * POLL_INTERVAL
-    of a period boundary. This avoids hitting the chain on every tick for
-    groups whose period boundary is far away.
+    Returns (position_in_period_seconds, period_duration_seconds).
+    position = how many seconds into the current period we are right now.
     """
     now = datetime.now(timezone.utc)
     start = group.start_date
@@ -129,52 +128,59 @@ def _group_needs_period_check(group: Group) -> bool:
         start = start.replace(tzinfo=timezone.utc)
 
     if now < start:
-        return False  # group hasn't started yet
+        duration = _period_duration(group).total_seconds()
+        return (duration, duration)  # not started — treat as "end" so nothing fires
 
-    duration = _period_duration(group)
+    duration = _period_duration(group).total_seconds()
     elapsed = (now - start).total_seconds()
-    position_in_period = elapsed % duration.total_seconds()
+    position = elapsed % duration
+    return (position, duration)
 
-    # True if we're within the first 2 poll intervals of a new period
-    # OR within the last 2 poll intervals of the current period
-    window = min(duration.total_seconds() * 0.1, 3600)
-    return position_in_period < window or (duration.total_seconds() - position_in_period) < window
 
+def _is_period_start(group: Group) -> bool:
+    """
+    True if we just entered a new period (first 3 poll intervals).
+    → Used by: create_period_contributions
+    """
+    position, _ = _get_period_position(group)
+    window = POLL_INTERVAL_SECONDS * 3  # e.g. 3 minutes
+    return position < window
+
+
+def _is_period_end(group: Group) -> bool:
+    """
+    True if we're near the END of the current period (last 3 poll intervals).
+    → Used by: check_overdue_contributions, process_rotation_payouts
+    
+    Period end = the contribution window has fully closed and we're
+    about to roll into the next period. This is when payouts happen
+    and missed contributions are penalised.
+    """
+    position, duration = _get_period_position(group)
+    window = POLL_INTERVAL_SECONDS * 3  
+    return (duration - position) < window
 
 # ── task 1: create contribution records at period start ───────────────────────
 
 def create_period_contributions() -> None:
-    """
-    For every active group near a period boundary, check whether the current
-    on-chain period already has DB contribution records. If not, create them
-    for all active members.
-
-    Safe to run repeatedly — idempotent via _contribution_exists check.
-    """
     db = _get_db()
     try:
         groups = _active_groups(db)
-        if not groups:
-            return
-
-        created_total = 0
+        logger.info("create_period_contributions: checking %d groups", len(groups))
 
         for group in groups:
-            # Skip chain call if we're not near a period boundary
-            if not _group_needs_period_check(group):
-                continue
-
             try:
+                # ── NO boundary check — just always ensure records exist ──
                 current_period = contribution_contract_svc.get_current_period(
                     group.contract_address
                 )
                 members  = _active_members(db, group.id)
                 due_date = _period_due_date(group, current_period)
+                created  = 0
 
                 for member in members:
                     if _contribution_exists(db, group.id, member.id, current_period):
                         continue
-
                     db.add(Contribution(
                         group_id=group.id,
                         member_id=member.id,
@@ -183,22 +189,23 @@ def create_period_contributions() -> None:
                         due_date=due_date,
                         period=current_period,
                     ))
-                    created_total += 1
+                    created += 1
 
-                db.commit()
+                if created:
+                    db.commit()
+                    logger.info(
+                        "Created %d contribution records for group %s period %d",
+                        created, group.id, current_period
+                    )
+                else:
+                    logger.info(
+                        "group %s period %d — all records already exist",
+                        group.id, current_period
+                    )
 
             except Exception as exc:
                 db.rollback()
-                logger.error(
-                    "create_period_contributions failed for group %s: %s",
-                    group.id, exc,
-                )
-
-        if created_total:
-            logger.info(
-                "create_period_contributions: created %d records", created_total
-            )
-
+                logger.error("create_period_contributions failed for group %s: %s", group.id, exc)
     finally:
         db.close()
 
@@ -227,7 +234,7 @@ def check_overdue_contributions() -> None:
                     .filter(
                         Contribution.group_id == group.id,
                         Contribution.status == ContributionStatus.pending,
-                        Contribution.due_date < now,
+                        Contribution.due_date < datetime.now(timezone.utc),
                         Contribution.paid_date.is_(None),
                     )
                     .all()
@@ -249,14 +256,14 @@ def check_overdue_contributions() -> None:
                 members = _active_members(db, group.id)
                 wallets = [m.wallet_address for m in members if m.wallet_address]
 
-                if wallets:
-                    tx_hash = contribution_contract_svc.batch_check_missed_contributions(
-                        group.contract_address, wallets
-                    )
-                    logger.info(
-                        "batchCheckMissedContributions tx for group %s: %s",
-                        group.id, tx_hash,
-                    )
+                if _is_period_end(group):  
+                    members = _active_members(db, group.id)
+                    wallets = [m.wallet_address for m in members if m.wallet_address]
+                    if wallets:
+                        tx_hash = contribution_contract_svc.batch_check_missed_contributions(
+                            group.contract_address, wallets
+                        )
+                        logger.info("batchCheckMissedContributions tx for group %s: %s", group.id, tx_hash)
 
             except Exception as exc:
                 db.rollback()
@@ -285,7 +292,7 @@ def process_rotation_payouts() -> None:
         groups = _active_groups(db)
 
         for group in groups:
-            if not _group_needs_period_check(group):
+            if not _is_period_end(group):
                 continue
 
             try:

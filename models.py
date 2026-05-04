@@ -205,7 +205,7 @@ class Contribution(Base):
     notes = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-    
+    period = Column(Integer, nullable=True, index=True)
     # Relationships
     group = relationship("Group", back_populates="contributions")
     member = relationship("GroupMember", back_populates="contributions")
