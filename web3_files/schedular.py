@@ -137,7 +137,7 @@ def _group_needs_period_check(group: Group) -> bool:
 
     # True if we're within the first 2 poll intervals of a new period
     # OR within the last 2 poll intervals of the current period
-    window = POLL_INTERVAL_SECONDS * 2
+    window = min(duration.total_seconds() * 0.1, 3600)
     return position_in_period < window or (duration.total_seconds() - position_in_period) < window
 
 
@@ -217,7 +217,7 @@ def check_overdue_contributions() -> None:
     db = _get_db()
     try:
         groups = _active_groups(db)
-        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        now = datetime.now(timezone.utc)
 
         for group in groups:
             try:
