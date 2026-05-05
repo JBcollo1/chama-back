@@ -141,6 +141,7 @@ class Group(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     approval_required = Column(Boolean, default=False)
     emergency_withdraw_allowed = Column(Boolean, default=False)
+    is_token_based = Column(Boolean, default=False)
 
    
     contract_address = Column(String(42), nullable=True, unique=True, index=True)  

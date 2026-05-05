@@ -5,13 +5,15 @@ from typing import List, Optional
 from uuid import UUID
 from datetime import datetime
 
+import logging
 from database import get_db
 from models import Contribution, Group, GroupMember, ContributionStatus
 from schemas import ContributionCreate, ContributionUpdate, ContributionResponse
 from web3_files.web3_contribution import ContributionContractService
 from web3_files.web3_main import Web3Service
 from web3_files.initialize import contribution_contract_svc  
-
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 def get_contract_service() -> ContributionContractService:
     """FastAPI dependency — returns a shared ContributionContractService instance."""
     return ContributionContractService(Web3Service())
@@ -281,11 +283,19 @@ class ContributionRoutes:
         member = db.query(GroupMember).filter(GroupMember.id == db_contribution.member_id).first()
         if not member or not member.wallet_address:
             raise HTTPException(status_code=400, detail="Member has no wallet address on record")
-
+        # contract = contract_svc.get_contract(group.contract_address)
+        contract = contract_svc._get_group_contract(group.contract_address)
+        contribution_amount_wei = contract.functions.rules().call()[1]
+        logger.info(
+            "build_contribute_tx: db_amount=%s, int_amount=%d, contract_amount=%d",
+            db_contribution.amount,
+            int(db_contribution.amount),
+            contract.functions.rules().call()[1],  # contributionAmount from chain
+        )
         return contract_svc.build_contribute_tx(
             group_contract_address=group.contract_address,
             member_wallet=member.wallet_address,
-            contribution_amount_wei=int(db_contribution.amount),
+            contribution_amount_wei=contribution_amount_wei,
             is_token_based=group.is_token_based,
         )
 
@@ -348,13 +358,14 @@ class ContributionRoutes:
         Build an unsigned payFine() tx for the member's wallet to sign.
         Fine amount is read from chain and included in _meta for the frontend to display.
         """
+
         db_contribution = db.query(Contribution).filter(Contribution.id == contribution_id).first()
         if not db_contribution:
             raise HTTPException(status_code=404, detail="Contribution not found")
 
         group = db.query(Group).filter(Group.id == db_contribution.group_id).first()
         member = db.query(GroupMember).filter(GroupMember.id == db_contribution.member_id).first()
-
+       
         if not group or not group.contract_address:
             raise HTTPException(status_code=400, detail="Group has no deployed contract address")
         if not member or not member.wallet_address:
