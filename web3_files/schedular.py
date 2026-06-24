@@ -160,6 +160,18 @@ def _is_period_end(group: Group) -> bool:
     window = POLL_INTERVAL_SECONDS * 3  
     return (duration - position) < window
 
+
+def disable_group(db:Session) -> None:
+   
+    now = datetime.now(timezone.utc)
+    return(
+
+        db.query(Group)
+        .filter(
+           Group.status == GroupStatus.active 
+        )
+    )
+
 # ── task 1: create contribution records at period start ───────────────────────
 
 def create_period_contributions() -> None:
