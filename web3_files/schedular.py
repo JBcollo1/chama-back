@@ -120,7 +120,7 @@ def _is_period_start(group: Group) -> bool:
     → Used by: create_period_contributions
     """
     position, _ = _get_period_position(group)
-    window = POLL_INTERVAL_SECONDS * 3  # e.g. 3 minutes
+    window = POLL_INTERVAL_SECONDS * 3  
     return position < window
 
 
