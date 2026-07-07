@@ -151,7 +151,7 @@ def disable_group(db:Session) -> None:
         .update({Group.status: GroupStatus.completed})
     )
 
-# ── task 1: create contribution records at period start ───────────────────────
+# ── task 1: create contribution rec
 
 def create_period_contributions() -> None:
     db = _get_db()
