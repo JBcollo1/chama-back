@@ -138,6 +138,11 @@ def _is_period_end(group: Group) -> bool:
     return (duration - position) < window
 
 
+
+
+
+
+
 def disable_group(db:Session) -> None:
    
     now = datetime.now(timezone.utc)
@@ -150,12 +155,14 @@ def disable_group(db:Session) -> None:
         )
         .update({Group.status: GroupStatus.completed})
     )
+    db.commit()
 
 # ── task 1: create contribution rec
 
 def create_period_contributions() -> None:
     db = _get_db()
     try:
+        disable_group(db)
         groups = _active_groups(db)
         logger.info("create_period_contributions: checking %d groups", len(groups))
 
