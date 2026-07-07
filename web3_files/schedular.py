@@ -1,27 +1,4 @@
-"""
-Contribution Scheduler
-======================
-Handles all time-based contribution lifecycle tasks:
 
-  1. create_period_contributions()
-     - Runs at the START of every period
-     - Creates off-chain Contribution records for every active group member
-     - These are the records the frontend uses to call build_contribute_tx / confirm
-
-  2. check_overdue_contributions()
-     - Runs after the contribution window + grace period closes
-     - Marks DB records as overdue if still pending
-     - Triggers on-chain batchCheckMissedContributions() per group
-
-  3. process_rotation_payouts()
-     - Runs at the END of every period
-     - Calls on-chain processRotationPayout() for every active group
-
-Registered in main.py via lifespan events — see main_lifespan_snippet.py.
-
-Install:
-    pip install "apscheduler==3.10.4"
-"""
 
 import logging
 from datetime import datetime, timedelta, timezone
@@ -168,8 +145,10 @@ def disable_group(db:Session) -> None:
 
         db.query(Group)
         .filter(
-           Group.status == GroupStatus.active 
+           Group.status == GroupStatus.active,
+           Group.end_date <= now and Group.end_date is not None
         )
+        .update({Group.status: GroupStatus.completed})
     )
 
 # ── task 1: create contribution records at period start ───────────────────────
