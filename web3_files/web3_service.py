@@ -346,52 +346,52 @@ class Web3JoinFunctions():
             logger.error(f"Contribution preparation failed: {e}")
             return {'success': False, 'error': str(e)}
 
-    async def verify_user_transaction(self, tx_hash: str, expected_from: str, expected_to: str = None) -> Dict[str, Any]:
-        """Verify that a user-submitted transaction was successful"""
-        try:
-            # Convert string to HexBytes for proper type handling
-            if not tx_hash.startswith('0x'):
-                tx_hash = '0x' + tx_hash
-            hash_bytes = HexBytes(tx_hash)
+    # async def verify_user_transaction(self, tx_hash: str, expected_from: str, expected_to: str = None) -> Dict[str, Any]:
+    #     """Verify that a user-submitted transaction was successful"""
+    #     try:
+    #         # Convert string to HexBytes for proper type handling
+    #         if not tx_hash.startswith('0x'):
+    #             tx_hash = '0x' + tx_hash
+    #         hash_bytes = HexBytes(tx_hash)
             
-            # Get transaction receipt
-            receipt = self.w3.eth.wait_for_transaction_receipt(hash_bytes, timeout=300)
+    #         # Get transaction receipt
+    #         receipt = self.w3.eth.wait_for_transaction_receipt(hash_bytes, timeout=300)
             
-            # Check transaction status
-            if receipt['status'] == 0:
-                return {'success': False, 'error': 'Transaction failed'}
+    #         # Check transaction status
+    #         if receipt['status'] == 0:
+    #             return {'success': False, 'error': 'Transaction failed'}
             
-            # Get transaction details
-            transaction = self.w3.eth.get_transaction(hash_bytes)
+    #         # Get transaction details
+    #         transaction = self.w3.eth.get_transaction(hash_bytes)
             
-            # Verify the transaction was sent from the expected address
-            if transaction.get('from', '').lower() != expected_from.lower():
-                return {
-                    'success': False, 
-                    'error': f'Transaction was not sent from expected address. Expected: {expected_from}, Got: {transaction.get("from", "")}'
-                }
+    #         # Verify the transaction was sent from the expected address
+    #         if transaction.get('from', '').lower() != expected_from.lower():
+    #             return {
+    #                 'success': False, 
+    #                 'error': f'Transaction was not sent from expected address. Expected: {expected_from}, Got: {transaction.get("from", "")}'
+    #             }
             
-            # Verify destination if provided
-            if expected_to and transaction.get('to', '').lower() != expected_to.lower():
-                return {
-                    'success': False,
-                    'error': f'Transaction was not sent to expected contract. Expected: {expected_to}, Got: {transaction.get("to", "")}'
-                }
+    #         # Verify destination if provided
+    #         if expected_to and transaction.get('to', '').lower() != expected_to.lower():
+    #             return {
+    #                 'success': False,
+    #                 'error': f'Transaction was not sent to expected contract. Expected: {expected_to}, Got: {transaction.get("to", "")}'
+    #             }
                 
-            return {
-                'success': True,
-                'tx_hash': tx_hash,
-                'block_number': receipt['blockNumber'],
-                'gas_used': receipt['gasUsed'],
-                'effective_gas_price': receipt.get('effectiveGasPrice'),
-                'from': transaction.get('from', '').lower(),
-                'to': transaction.get('to', '').lower() if transaction.get('to') else None,
-                'value': str(transaction.get('value', 0))
-            }
+    #         return {
+    #             'success': True,
+    #             'tx_hash': tx_hash,
+    #             'block_number': receipt['blockNumber'],
+    #             'gas_used': receipt['gasUsed'],
+    #             'effective_gas_price': receipt.get('effectiveGasPrice'),
+    #             'from': transaction.get('from', '').lower(),
+    #             'to': transaction.get('to', '').lower() if transaction.get('to') else None,
+    #             'value': str(transaction.get('value', 0))
+    #         }
             
-        except Exception as e:
-            logger.error(f"Transaction verification failed: {e}")
-            return {'success': False, 'error': str(e)}
+    #     except Exception as e:
+    #         logger.error(f"Transaction verification failed: {e}")
+    #         return {'success': False, 'error': str(e)}
 
     async def verify_group_creation_transaction(self, tx_hash: str, creator_address: str) -> Dict[str, Any]:
         """Verify a group creation transaction and extract the group address"""
