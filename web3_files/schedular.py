@@ -43,7 +43,7 @@ def _active_members(db: Session, group_id) -> list[GroupMember]:
         db.query(GroupMember)
         .filter(
             GroupMember.group_id == group_id,
-            GroupMember.is_active == "active",
+            GroupMember.status == GroupMemberStatus.active,
             GroupMember.wallet_address.isnot(None),
         )
         .all()
@@ -145,8 +145,8 @@ def _is_period_end(group: Group) -> bool:
 
 def disable_group(db:Session) -> None:
    
-    now = datetime.now(timezone.utc)
-    return(
+        now = datetime.now(timezone.utc)
+    
 
         db.query(Group)
         .filter(
@@ -154,8 +154,8 @@ def disable_group(db:Session) -> None:
            Group.end_date <= now and Group.end_date is not None
         )
         .update({Group.status: GroupStatus.completed})
-    )
-    db.commit()
+        db.commit()
+        
 
 # ── task 1: create contribution rec
 

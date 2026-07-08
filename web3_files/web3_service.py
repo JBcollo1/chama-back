@@ -459,12 +459,13 @@ class Web3JoinFunctions():
                 checksum_address = to_checksum_address(user_address)
                 logger.info(f"Calling isMember for address: {checksum_address}")
                 
-                is_member = group_contract.functions.getMemberDetails(checksum_address).call()
-                logger.info(f"isMember result: {is_member}")
-                
-                if not is_member:
-                    logger.error(f"User {user_address} is not registered as member after transaction")
+                exists, active, *_ = group_contract.functions.getMemberDetails(checksum_address).call()
+                if not exists:
                     return {'success': False, 'error': 'User is not registered as a member after transaction'}
+                
+                # if not is_member:
+                #     logger.error(f"User {user_address} is not registered as member after transaction")
+                #     return {'success': False, 'error': 'User is not registered as a member after transaction'}
             except Exception as contract_error:
                 logger.error(f"Error checking membership on contract: {str(contract_error)}", exc_info=True)
                 return {'success': False, 'error': f'Failed to verify membership: {str(contract_error)}'}

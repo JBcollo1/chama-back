@@ -279,7 +279,7 @@ class ContributionContractService:
             if not is_active:
                 raise HTTPException(status_code=400, detail="Member has no active punishment.")
 
-            FINE_ACTION = 1  # ChamaStructs.PunishmentAction.Fine
+            FINE_ACTION = 2  # ChamaStructs.PunishmentAction.Fine
             if action != FINE_ACTION:
                 raise HTTPException(status_code=400, detail="Active punishment is not a fine — cannot pay.")
 
